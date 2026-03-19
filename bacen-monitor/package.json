@@ -1,0 +1,24 @@
+{
+  "name": "bacen-monitor",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "packages/types",
+    "packages/cadoc-engine"
+  ],
+  "scripts": {
+    "dev":        "npm run dev --workspace=apps/web",
+    "build":      "npm run build --workspace=apps/web",
+    "start":      "npm run start --workspace=apps/web",
+    "lint":       "npm run lint --workspace=apps/web",
+    "type-check": "npm run type-check --workspace=apps/web"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}
