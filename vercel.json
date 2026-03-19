@@ -1,0 +1,7 @@
+{
+  "rewrites": [],
+  "buildCommand": "cd bacen-monitor && npm install && npm run build",
+  "outputDirectory": "bacen-monitor/apps/web/.next",
+  "installCommand": "echo skip",
+  "framework": null
+}
