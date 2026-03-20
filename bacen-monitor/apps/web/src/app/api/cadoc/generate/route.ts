@@ -1,212 +1,193 @@
-// apps/web/src/app/api/cadoc/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { validate3044 } from '@bacen-monitor/cadoc-engine'
-import { CADOC_OP_WEIGHT, PLAN_OPS_INCLUDED } from '@/lib/billing'
-import { z } from 'zod'
-import type { CadocType } from '@bacen-monitor/types'
 
-const GenerateSchema = z.object({
-  cadoc: z.enum(['3040', '3044', '3060', '4010', '6334']),
-  input: z.record(z.unknown()),
-  options: z.object({
-    validate: z.boolean().default(true),
-  }).optional(),
-})
+type CadocCode = '3040'|'3044'|'3060'|'4010'|'6334'
+
+interface ValItem { tipo:'erro'|'aviso'; cod:string; msg:string; op?:string }
+
+function validate3044(obj:any):{erros:ValItem[],avisos:ValItem[],nOps:number}{
+  const erros:ValItem[]=[],avisos:ValItem[]=[]
+  const e=(cod:string,msg:string,op?:string)=>erros.push({tipo:'erro',cod,msg,op})
+  const w=(cod:string,msg:string,op?:string)=>avisos.push({tipo:'aviso',cod,msg,op})
+  if(!obj.cnpjIF)e('B01','cnpjIF ausente')
+  if(!obj.dataHoraRemessa)e('B01','dataHoraRemessa ausente')
+  if(!obj.envia3050)e('B01','envia3050 ausente (S ou N)')
+  if(!Array.isArray(obj.operacoes)||!obj.operacoes.length){e('B01','operacoes deve ser array não vazio');return{erros,avisos,nOps:0}}
+  const tsR=new Date((obj.dataHoraRemessa||'').replace(' ','T')+'Z')
+  const cut=new Date();cut.setMonth(cut.getMonth()-24)
+  for(const op of obj.operacoes){
+    const ipoc=op.ipoc||'(sem IPOC)'
+    if(op.acao===2){if(!op.ipoc)e('B01','ipoc obrigatório para acao=2',ipoc);continue}
+    if(op.acao!==1){e('B01',`acao inválida: ${op.acao}`,ipoc);continue}
+    if(!op.ipoc)e('B01','ipoc obrigatório',ipoc)
+    if(op.saldoDevedor===undefined)e('B01','saldoDevedor obrigatório',ipoc)
+    if(!op.dataSaldoDevedor)e('B01','dataSaldoDevedor obrigatório',ipoc)
+    if(!op.atraso)e('B01','atraso obrigatório (S/N)',ipoc)
+    const ds=new Date((op.dataSaldoDevedor||'')+'T00:00:00Z')
+    if(ds>tsR)e('T01','dataSaldoDevedor posterior à remessa',ipoc)
+    if(ds<cut)e('T11','dataSaldoDevedor anterior a 24 meses',ipoc)
+    if(obj.envia3050==='N'&&op.class3050)e('T07','class3050 preenchido com envia3050=N',ipoc)
+    if(obj.envia3050==='S'&&!op.class3050)e('T08','class3050 obrigatório quando envia3050=S',ipoc)
+    const seenP=new Set<string>(),seenC=new Set<string>()
+    for(const p of op.pagamentos||[]){
+      const dp=new Date(p.data+'T00:00:00Z')
+      if(dp>ds)e('T02','pagamento.data posterior a dataSaldoDevedor',ipoc)
+      if(dp<cut)e('T12','pagamento.data anterior a 24 meses',ipoc)
+      if(seenP.has(p.data))e('T05',`pagamento duplicado em ${p.data}`,ipoc)
+      seenP.add(p.data)
+    }
+    for(const c of op.concessoes||[]){
+      const dc=new Date(c.data+'T00:00:00Z')
+      if(dc>ds)e('T03','concessao.data posterior a dataSaldoDevedor',ipoc)
+      if(dc<cut)e('T13','concessao.data anterior a 24 meses',ipoc)
+      if(seenC.has(c.data))e('T06',`concessao duplicada em ${c.data}`,ipoc)
+      seenC.add(c.data)
+    }
+    const evts=(op.pagamentos?.length??0)+(op.concessoes?.length??0)+(op.cessoes?.length??0)+(op.aquisicoes?.length??0)
+    if(!evts)w('W01','operação sem eventos',ipoc)
+  }
+  return{erros,avisos,nOps:obj.operacoes.length}
+}
+
+function validate3040(obj:any):{erros:ValItem[],avisos:ValItem[],nOps:number}{
+  const erros:ValItem[]=[],avisos:ValItem[]=[]
+  const e=(cod:string,msg:string)=>erros.push({tipo:'erro',cod,msg})
+  const w=(cod:string,msg:string)=>avisos.push({tipo:'aviso',cod,msg})
+  if(!obj.cabecalho)e('H01','cabecalho ausente')
+  else{if(!obj.cabecalho.CNPJ)e('H02','CNPJ ausente');if(!obj.cabecalho.DtBase)e('H03','DtBase ausente');if(!obj.cabecalho.MetodApPE)e('H04','MetodApPE ausente')}
+  if(!Array.isArray(obj.clientes)){e('C01','clientes deve ser array');return{erros,avisos,nOps:0}}
+  if(!obj.clientes.length)w('C02','clientes vazio')
+  let nOps=0
+  obj.clientes.forEach((cli:any,ci:number)=>{
+    if(!cli.Cd)e('C03',`clientes[${ci}].Cd ausente`)
+    if(!Array.isArray(cli.operacoes)){e('C04',`clientes[${ci}].operacoes inválido`);return}
+    nOps+=cli.operacoes.length
+    cli.operacoes.forEach((op:any,oi:number)=>{
+      if(!op.IPOC)e('O01',`clientes[${ci}].op[${oi}].IPOC ausente`)
+      else if(op.IPOC.length!==24)e('O02',`IPOC deve ter 24 chars (tem ${op.IPOC.length})`)
+      if(!op.Mod)e('O03',`clientes[${ci}].op[${oi}].Mod ausente`)
+      if(op.VlrContr===undefined)e('O04',`clientes[${ci}].op[${oi}].VlrContr ausente`)
+    })
+  })
+  return{erros,avisos,nOps}
+}
+
+function validate4010(obj:any):{erros:ValItem[],avisos:ValItem[],nOps:number}{
+  const erros:ValItem[]=[],avisos:ValItem[]=[]
+  const e=(cod:string,msg:string)=>erros.push({tipo:'erro',cod,msg})
+  if(!obj.cabecalho)e('H01','cabecalho ausente')
+  else{if(!obj.cabecalho.cnpj)e('H02','cnpj ausente');if(!obj.cabecalho.dataBase)e('H03','dataBase ausente')}
+  if(!Array.isArray(obj.contas)){e('C01','contas deve ser array');return{erros,avisos,nOps:0}}
+  obj.contas.forEach((c:any,i:number)=>{
+    if(!c.codigoConta)e('C02',`contas[${i}].codigoConta ausente`)
+    if(c.saldo===undefined)e('C03',`contas[${i}].saldo ausente`)
+  })
+  return{erros,avisos,nOps:obj.contas.length}
+}
+
+function validate3060(obj:any):{erros:ValItem[],avisos:ValItem[],nOps:number}{
+  const erros:ValItem[]=[],avisos:ValItem[]=[]
+  const e=(cod:string,msg:string)=>erros.push({tipo:'erro',cod,msg})
+  if(!obj.cnpj)e('H01','cnpj ausente')
+  if(!obj.dataBase)e('H02','dataBase ausente')
+  ;['percentil25','percentil50','percentil75','percentil100'].forEach((p,i)=>{
+    if(obj[p]===undefined)e(`P0${i+1}`,`${p} ausente`)
+  })
+  return{erros,avisos,nOps:1}
+}
+
+function validate6334(obj:any):{erros:ValItem[],avisos:ValItem[],nOps:number}{
+  const erros:ValItem[]=[],avisos:ValItem[]=[]
+  const e=(cod:string,msg:string)=>erros.push({tipo:'erro',cod,msg})
+  for(const k of['database','conccred','desconto','intercam','lucrcred','ranking','infresta','infrterm','contatos','segmento'])
+    if(!obj[k])e('SEC',`Seção "${k}" ausente`)
+  if(!obj.database?.ispb)e('DB01','database.ispb ausente')
+  if(!obj.database?.dataBase)e('DB02','database.dataBase ausente')
+  return{erros,avisos,nOps:Array.isArray(obj.conccred)?obj.conccred.length:0}
+}
+
+const esc=(v:any)=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+
+function gen3040xml(obj:any):string{
+  const cab=obj.cabecalho||{}
+  let x=`<?xml version="1.0" encoding="UTF-8"?>\n<Doc3040 versao="11">\n  <Cabec>\n    <CNPJ>${esc(cab.CNPJ)}</CNPJ>\n    <DtBase>${esc(cab.DtBase)}</DtBase>\n    <MetodApPE>${esc(cab.MetodApPE)}</MetodApPE>\n    <TotalCli>${esc(cab.TotalCli)}</TotalCli>\n  </Cabec>\n`
+  for(const cli of obj.clientes||[]){
+    x+=`  <Cli>\n    <Cd>${esc(cli.Cd)}</Cd>\n`
+    for(const op of cli.operacoes||[]){
+      x+=`    <Op>\n      <IPOC>${esc(op.IPOC)}</IPOC>\n      <Mod>${esc(op.Mod)}</Mod>\n`
+      if(op.NatuOp)x+=`      <NatuOp>${esc(op.NatuOp)}</NatuOp>\n`
+      if(op.ClassOp)x+=`      <ClassOp>${esc(op.ClassOp)}</ClassOp>\n`
+      x+=`      <VlrContr>${esc(op.VlrContr)}</VlrContr>\n`
+      for(const v of op.vencimentos||[])x+=`      <Venc><Cd>${esc(v.Cd)}</Cd><Val>${esc(v.Val)}</Val></Venc>\n`
+      x+=`    </Op>\n`
+    }
+    x+=`  </Cli>\n`
+  }
+  return x+`</Doc3040>`
+}
+
+function gen4010xml(obj:any):string{
+  const cab=obj.cabecalho||{}
+  let x=`<?xml version="1.0" encoding="UTF-8"?>\n<Doc4010>\n  <Cabec>\n    <CNPJ>${esc(cab.cnpj)}</CNPJ>\n    <DataBase>${esc(cab.dataBase)}</DataBase>\n    <TpArq>${esc(cab.tpArq||'M')}</TpArq>\n  </Cabec>\n`
+  for(const c of obj.contas||[])x+=`  <Conta><Cod>${esc(c.codigoConta)}</Cod><Saldo>${esc(c.saldo)}</Saldo></Conta>\n`
+  return x+`</Doc4010>`
+}
+
+function gen3060xml(obj:any):string{
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Doc3060>\n  <CNPJ>${esc(obj.cnpj)}</CNPJ>\n  <DataBase>${esc(obj.dataBase)}</DataBase>\n  <Percentil25>${esc(obj.percentil25)}</Percentil25>\n  <Percentil50>${esc(obj.percentil50)}</Percentil50>\n  <Percentil75>${esc(obj.percentil75)}</Percentil75>\n  <Percentil100>${esc(obj.percentil100)}</Percentil100>\n</Doc3060>`
+}
 
 export async function POST(req: NextRequest) {
-  const supabase = createClient()
-
-  // ── Auth ────────────────────────────────────────────────────
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  // ── Parse body ──────────────────────────────────────────────
-  let body: z.infer<typeof GenerateSchema>
   try {
-    body = GenerateSchema.parse(await req.json())
-  } catch (e) {
-    return NextResponse.json({ error: 'Invalid request body', details: e }, { status: 400 })
-  }
+    const body = await req.json()
+    const { cadoc, input } = body as { cadoc: CadocCode; input: any }
 
-  const { cadoc, input } = body
-
-  // ── Get tenant ──────────────────────────────────────────────
-  const { data: userData } = await supabase
-    .from('users')
-    .select('tenant_id, role')
-    .eq('id', user.id)
-    .single()
-
-  if (!userData) {
-    return NextResponse.json({ error: 'User not found' }, { status: 404 })
-  }
-
-  const { data: tenant } = await supabase
-    .from('tenants')
-    .select('*')
-    .eq('id', userData.tenant_id)
-    .single()
-
-  if (!tenant || !tenant.is_active) {
-    return NextResponse.json({ error: 'Tenant inactive or not found' }, { status: 403 })
-  }
-
-  // ── Check permission ────────────────────────────────────────
-  if (userData.role === 'viewer') {
-    return NextResponse.json({ error: 'Viewers cannot generate CADOCs' }, { status: 403 })
-  }
-
-  // ── Check plan: CADOC access ─────────────────────────────────
-  const { data: planConfig } = await supabase
-    .from('plan_configs')
-    .select('max_cadocs')
-    .eq('plan', tenant.plan)
-    .single()
-
-  if (planConfig?.max_cadocs && !planConfig.max_cadocs.includes(cadoc)) {
-    return NextResponse.json({
-      error: 'CADOC_NOT_IN_PLAN',
-      message: `CADOC ${cadoc} não está disponível no plano ${tenant.plan}. Faça upgrade para Professional.`,
-    }, { status: 402 })
-  }
-
-  // ── Check usage limit ────────────────────────────────────────
-  const period = new Date().toISOString().substring(0, 7)  // "YYYY-MM"
-  const { data: usageData } = await supabase
-    .from('usage_records')
-    .select('n_operacoes')
-    .eq('tenant_id', userData.tenant_id)
-    .eq('billing_period', period)
-
-  const usedOps = usageData?.reduce((sum, r) => sum + r.n_operacoes, 0) ?? 0
-  const opsLimit = PLAN_OPS_INCLUDED[tenant.plan as keyof typeof PLAN_OPS_INCLUDED] ?? 5000
-  const isTrial  = tenant.subscription_status === 'trialing'
-  const trialLimit = 1000
-
-  if (isTrial && usedOps >= trialLimit) {
-    return NextResponse.json({
-      error: 'TRIAL_LIMIT_EXCEEDED',
-      message: 'Limite de 1.000 operações do trial atingido. Adicione um cartão para continuar.',
-      opsUsed: usedOps,
-      opsLimit: trialLimit,
-    }, { status: 402 })
-  }
-
-  // ── Create job record ────────────────────────────────────────
-  const { data: job, error: jobError } = await supabase
-    .from('cadoc_jobs')
-    .insert({
-      tenant_id: userData.tenant_id,
-      created_by: user.id,
-      cadoc,
-      cnpj_if: extractCnpj(input, cadoc),
-      data_base: extractDataBase(input, cadoc),
-      status: 'processing',
-      input_json: input,
-    })
-    .select()
-    .single()
-
-  if (jobError || !job) {
-    return NextResponse.json({ error: 'Failed to create job' }, { status: 500 })
-  }
-
-  try {
-    // ── Validate + Generate ──────────────────────────────────
-    const startedAt = Date.now()
-    let validationReport = null
-    let outputXml = ''
-    let nOperacoes = 0
-    let nErros = 0
-    let nAvisos = 0
-
-    if (cadoc === '3044') {
-      const result = validate3044(input as any)
-      nErros  = result.erros.length
-      nAvisos = result.avisos.length
-      nOperacoes = result.meta.nOperacoes
-      validationReport = { erros: result.erros, avisos: result.avisos, nErros, nAvisos }
-      // Strip _comentario fields from output
-      const cleanInput = JSON.parse(JSON.stringify(input))
-      if (Array.isArray(cleanInput.operacoes)) {
-        cleanInput.operacoes.forEach((op: any) => delete op._comentario)
-      }
-      outputXml = JSON.stringify(cleanInput, null, 2)
-    }
-    // TODO: add 3040, 4010, 6334, 3060 generators
-
-    const processingMs = Date.now() - startedAt
-    const result_status = nErros > 0 ? 'reprovado' : nAvisos > 0 ? 'com_alertas' : 'aprovado'
-    const filename = `cadoc${cadoc}_${extractCnpj(input, cadoc)}_${extractDataBase(input, cadoc).replace(/-/g,'')}.${cadoc === '3044' ? 'json' : 'xml'}`
-
-    // ── Update job ──────────────────────────────────────────
-    await supabase.from('cadoc_jobs').update({
-      status: 'completed',
-      result: result_status,
-      n_erros: nErros,
-      n_avisos: nAvisos,
-      n_operacoes: nOperacoes,
-      output_xml: outputXml,
-      output_filename: filename,
-      validation_report: validationReport,
-      started_at: new Date(startedAt).toISOString(),
-      completed_at: new Date().toISOString(),
-      processing_ms: processingMs,
-    }).eq('id', job.id)
-
-    // ── Record usage ────────────────────────────────────────
-    if (nOperacoes > 0) {
-      await supabase.rpc('record_cadoc_usage', {
-        p_tenant_id: userData.tenant_id,
-        p_job_id: job.id,
-        p_cadoc: cadoc,
-        p_n_operacoes: nOperacoes,
-      })
+    if (!cadoc || !input) {
+      return NextResponse.json({ error: 'cadoc e input são obrigatórios' }, { status: 400 })
     }
 
-    // ── Audit log ───────────────────────────────────────────
-    await supabase.from('audit_logs').insert({
-      tenant_id: userData.tenant_id,
-      user_id: user.id,
-      action: 'cadoc.generate',
-      resource: cadoc,
-      resource_id: job.id,
-      metadata: { nErros, nAvisos, nOperacoes, filename, result: result_status },
-    })
+    let v: { erros: ValItem[]; avisos: ValItem[]; nOps: number }
+    let content = '', ext = 'xml'
+    const cnpj = (input.cnpjIF||input.cabecalho?.CNPJ||input.cabecalho?.cnpj||input.cnpj||'0000').replace(/\D/g,'')
+    const db = (input.dataHoraRemessa||input.cabecalho?.DtBase||input.cabecalho?.dataBase||input.dataBase||new Date().toISOString().substring(0,10)).substring(0,10).replace(/-/g,'')
+
+    if (cadoc==='3044') {
+      v=validate3044(input)
+      const clean=JSON.parse(JSON.stringify(input))
+      if(Array.isArray(clean.operacoes))clean.operacoes.forEach((o:any)=>delete o._comentario)
+      content=JSON.stringify(clean,null,2); ext='json'
+    } else if (cadoc==='3040') {
+      v=validate3040(input); content=gen3040xml(input)
+    } else if (cadoc==='4010') {
+      v=validate4010(input); content=gen4010xml(input)
+    } else if (cadoc==='3060') {
+      v=validate3060(input); content=gen3060xml(input)
+    } else if (cadoc==='6334') {
+      v=validate6334(input); content=JSON.stringify(input,null,2); ext='json'
+    } else {
+      return NextResponse.json({ error: `CADOC ${cadoc} não suportado` }, { status: 400 })
+    }
+
+    const nErros = v.erros.length
+    const nAvisos = v.avisos.length
+    const result = nErros>0 ? 'reprovado' : nAvisos>0 ? 'com_alertas' : 'aprovado'
+    const filename = `cadoc${cadoc}_${cnpj}_${db}.${ext}`
 
     return NextResponse.json({
-      jobId: job.id,
+      jobId: `local_${Date.now()}`,
       cadoc,
       filename,
-      nOperacoes,
-      validation: validationReport,
-      result: result_status,
+      content,
+      nOperacoes: v.nOps,
+      nErros,
+      nAvisos,
+      result,
+      validation: { erros: v.erros, avisos: v.avisos },
     })
 
-  } catch (err) {
-    // Mark job as failed
-    await supabase.from('cadoc_jobs').update({
-      status: 'failed',
-      result: 'erro_conversao',
-    }).eq('id', job.id)
-
-    console.error('CADOC generation error:', err)
-    return NextResponse.json({ error: 'Generation failed', details: String(err) }, { status: 500 })
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: 'Erro interno', message: err.message },
+      { status: 500 }
+    )
   }
-}
-
-// ── Helpers ──────────────────────────────────────────────────
-function extractCnpj(input: Record<string, unknown>, cadoc: string): string {
-  if (cadoc === '3044') return String((input as any).cnpjIF ?? '?')
-  if (cadoc === '4010') return String((input as any).cabecalho?.cnpj ?? '?')
-  return String((input as any).cabecalho?.CNPJ ?? '?')
-}
-
-function extractDataBase(input: Record<string, unknown>, cadoc: string): string {
-  if (cadoc === '3044') return String((input as any).dataHoraRemessa ?? '').substring(0, 10)
-  if (cadoc === '4010') return String((input as any).cabecalho?.dataBase ?? '?')
-  return String((input as any).cabecalho?.DtBase ?? '?')
 }
