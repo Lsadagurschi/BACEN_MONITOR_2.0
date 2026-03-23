@@ -7,10 +7,10 @@
     "packages/cadoc-engine"
   ],
   "scripts": {
-    "dev":        "npm run dev --workspace=apps/web",
-    "build":      "npm run build --workspace=apps/web",
-    "start":      "npm run start --workspace=apps/web",
-    "lint":       "npm run lint --workspace=apps/web",
+    "dev": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspace=apps/web",
+    "start": "npm run start --workspace=apps/web",
+    "lint": "npm run lint --workspace=apps/web",
     "type-check": "npm run type-check --workspace=apps/web"
   },
   "devDependencies": {
@@ -20,5 +20,10 @@
   "engines": {
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
+  },
+  "dependencies": {
+    "next": "^14.2.35",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
   }
 }
