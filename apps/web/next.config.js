@@ -2,7 +2,6 @@
 const path = require('path')
 
 const nextConfig = {
-  // Resolve internal monorepo packages via filesystem (no npm publish needed)
   webpack: (config) => {
     config.resolve.alias = {
       ...config.resolve.alias,
@@ -10,16 +9,6 @@ const nextConfig = {
       '@bacen-monitor/cadoc-engine': path.resolve(__dirname, '../../packages/cadoc-engine/src/index.ts'),
     }
     return config
-  },
-  async headers() {
-    return [{
-      source: '/(.*)',
-      headers: [
-        { key: 'X-Frame-Options',       value: 'DENY' },
-        { key: 'X-Content-Type-Options', value: 'nosniff' },
-        { key: 'Referrer-Policy',        value: 'strict-origin-when-cross-origin' },
-      ],
-    }]
   },
 }
 

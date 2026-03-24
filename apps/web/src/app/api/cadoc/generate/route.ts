@@ -4,11 +4,9 @@ export async function POST(req: NextRequest) {
   try {
     const { cadoc, input } = await req.json()
     if (!cadoc || !input) return NextResponse.json({ error: 'cadoc e input obrigatórios' }, { status: 400 })
-
-    const cnpj = (input.cnpjIF||input.cabecalho?.CNPJ||input.cabecalho?.cnpj||input.cnpj||'0000').replace(/\D/g,'')
-    const db = (input.dataHoraRemessa||input.cabecalho?.DtBase||input.cabecalho?.dataBase||input.dataBase||new Date().toISOString().substring(0,10)).substring(0,10).replace(/-/g,'')
+    const cnpj = String(input.cnpjIF || input.cabecalho?.CNPJ || input.cabecalho?.cnpj || input.cnpj || '0000').replace(/\D/g, '')
+    const db = String(input.dataHoraRemessa || input.cabecalho?.DtBase || input.cabecalho?.dataBase || input.dataBase || new Date().toISOString().substring(0,10)).substring(0,10).replace(/-/g,'')
     const ext = cadoc === '3044' ? 'json' : 'xml'
-
     return NextResponse.json({
       jobId: `job_${Date.now()}`,
       cadoc,
