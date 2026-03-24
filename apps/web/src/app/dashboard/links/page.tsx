@@ -1,3 +1,4 @@
+'use client'
 export default function LinksPage() {
   const links = [
     {ico:'🏛',nm:'Portal BCB',desc:'Banco Central do Brasil — portal oficial',url:'https://www.bcb.gov.br',cat:'Regulador'},
@@ -31,11 +32,10 @@ export default function LinksPage() {
           <a key={l.url} href={l.url} target="_blank" rel="noreferrer" style={{
             display:'flex', gap:12, padding:'14px 16px',
             background:'#fff', border:`1px solid ${C.brd}`, borderRadius:10,
-            textDecoration:'none', transition:'all .15s',
-            cursor:'pointer'
+            textDecoration:'none', transition:'border-color .15s, box-shadow .15s',
+            cursor:'pointer', outline:'none'
           }}
-          onMouseEnter={e=>{ (e.currentTarget as HTMLElement).style.borderColor=C.grn; (e.currentTarget as HTMLElement).style.boxShadow='0 4px 16px rgba(0,0,0,.08)' }}
-          onMouseLeave={e=>{ (e.currentTarget as HTMLElement).style.borderColor=C.brd; (e.currentTarget as HTMLElement).style.boxShadow='none' }}>
+>
             <div style={{ width:36, height:36, borderRadius:8, background:C.grnb, border:`1px solid ${C.grnbrd}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>{l.ico}</div>
             <div style={{ minWidth:0 }}>
               <div style={{ fontSize:12.5, fontWeight:700, color:C.txt, marginBottom:2 }}>{l.nm}</div>

@@ -82,8 +82,7 @@ export default function DashboardPage() {
       <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:10, marginBottom:20 }}>
         {kpis.map(k=>(
           <a key={k.l} href={k.href} style={{ background:C.bg2, border:`1px solid ${C.brd}`, borderRadius:10, padding:'14px 16px', borderTop:`3px solid ${k.c}`, textDecoration:'none', display:'block', transition:'all .15s' }}
-            onMouseEnter={e=>(e.currentTarget as HTMLElement).style.boxShadow='0 4px 16px rgba(0,0,0,.08)'}
-            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.boxShadow='none'}>
+>
             <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', marginBottom:4 }}>{k.v}</div>
             <div style={{ fontSize:10, color:C.txt3 }}>{k.l}</div>
           </a>
@@ -142,8 +141,7 @@ export default function DashboardPage() {
         <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:0 }}>
           {shortcuts.map((s,i)=>(
             <a key={s.l} href={s.href} style={{ display:'flex', flexDirection:'column', alignItems:'center', padding:'16px 12px', textDecoration:'none', borderRight:i<shortcuts.length-1?`1px solid ${C.brd}`:'none', transition:'background .15s', background:'transparent', textAlign:'center' }}
-              onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background=s.c+'08'}
-              onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+>
               <div style={{ fontSize:22, marginBottom:6 }}>{s.ico}</div>
               <div style={{ fontSize:11, fontWeight:700, color:C.txt, marginBottom:2 }}>{s.l}</div>
               <div style={{ fontSize:9.5, color:C.txt3, lineHeight:1.4 }}>{s.desc}</div>
