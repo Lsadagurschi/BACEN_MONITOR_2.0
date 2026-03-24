@@ -55,7 +55,7 @@ export default function NormasPage() {
   const urgCnt = NORMAS_STATIC.reduce((a,n)=>{ a[n.urgencia]=(a[n.urgencia]||0)+1; return a },{} as Record<string,number>)
   const criticas = NORMAS_STATIC.filter(n=>n.urgencia==='critica').length
 
-  const toggleCard = (id: NormaId) => setCards(prev => ({ ...prev, [id]: { open:!prev[id]?.open, ctab:'analise', ...prev[id], open:!prev[id]?.open } }))
+  const toggleCard = (id: NormaId) => setCards(prev => ({ ...prev, [id]: { ...prev[id], ctab:'analise', open:!prev[id]?.open } }))
   const setCtab = (id: NormaId, ctab: 'analise'|'resumo'|'cadoc') => setCards(prev => ({ ...prev, [id]: { ...prev[id], ctab, open:true } }))
 
   const gerarAnalise = async (n: typeof NORMAS_STATIC[0]) => {
