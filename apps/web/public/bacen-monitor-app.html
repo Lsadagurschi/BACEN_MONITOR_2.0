@@ -2327,10 +2327,17 @@ function render(){
               <h1 class="feed-h1">${state.area==="all"?"Normas BCB/CMN Vigentes":areaLabel}</h1>
               <span class="feed-sub">${normas.length} normas · feed ao vivo bcb.gov.br${rssLoading?" · <span style=\'color:var(--amb)\'>carregando…</span>":""}</span>
             </div>
-            <button class="ent-refresh ${rssLoading?"spinning":""}" style="flex-shrink:0;margin-top:2px"
-              onclick="BCB_NORMA_FEEDS.forEach(f=>fetchRssFeed(f,entState.rssAno))">
-              ${rssLoading?"⏳":"↻"} Atualizar Feed
-            </button>
+            <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap">
+              <select id="normas-ano-sel"
+                style="font-size:10px;padding:4px 7px;border:1px solid var(--brd);border-radius:var(--r2);background:#fff;font-family:var(--mono);color:var(--txt2);cursor:pointer"
+                onchange="entState.rssAno=parseInt(this.value);saveRssState();lsClear(LS_KEYS.normas);BCB_NORMA_FEEDS.forEach(f=>fetchRssFeed(f,parseInt(this.value)))">
+                ${[new Date().getFullYear(), new Date().getFullYear()-1, new Date().getFullYear()-2].map(y=>`<option value="${y}" ${entState.rssAno===y?"selected":""}>${y}</option>`).join("")}
+              </select>
+              <button class="ent-refresh ${rssLoading?"spinning":""}"
+                onclick="lsClear(LS_KEYS.normas);entState.rssAno=new Date().getFullYear();saveRssState();BCB_NORMA_FEEDS.forEach(f=>fetchRssFeed(f,new Date().getFullYear()));toast('Buscando normas mais recentes do BCB ('+(new Date().getFullYear())+')…','ok')">
+                ${rssLoading?"⏳":"↻"} Atualizar Feed BCB
+              </button>
+            </div>
           </div>
           ${feedContent}
         </div>
@@ -7233,19 +7240,111 @@ function renderGeracaoPage() {
           </div>
         </div>
         <div style="padding:12px 14px">
-          <div class="gen-kpi-row">
-            ${gs.cadocSel === '6334' ? `
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo6334?.totalArquivos||10}</div><div class="gen-kpi-lbl">Arquivos TXT</div></div>
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo6334?.conccredLinhas||0}</div><div class="gen-kpi-lbl">Linhas CONCCRED</div></div>
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo6334?.intercamLinhas||0}</div><div class="gen-kpi-lbl">Linhas INTERCAM</div></div>
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo6334?.segmentos||0}</div><div class="gen-kpi-lbl">Segmentos</div></div>
-            ` : `
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo?.totalCli||0}</div><div class="gen-kpi-lbl">Clientes</div></div>
-              <div class="gen-kpi"><div class="gen-kpi-val">${pr.resumo?.totalOps||0}</div><div class="gen-kpi-lbl">Operações</div></div>
-            `}
-            <div class="gen-kpi"><div class="gen-kpi-val" style="color:var(--red)">${nE}</div><div class="gen-kpi-lbl">Erros</div></div>
-            <div class="gen-kpi"><div class="gen-kpi-val" style="color:var(--amb)">${nA}</div><div class="gen-kpi-lbl">Avisos</div></div>
-          </div>
+          <!-- ── Dashboard de KPIs por tipo de CADOC ── -->
+          ${(()=>{
+            const fmtR=(v)=>'R$\u00a0'+(v||0).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0});
+            const fmtN=(v)=>(v||0).toLocaleString('pt-BR');
+            const kpi=(val,lbl,cor='var(--cyn)',sub='')=>`<div class="gen-kpi"><div class="gen-kpi-val" style="color:${cor}">${val}</div><div class="gen-kpi-lbl">${lbl}</div>${sub?`<div style="font-size:8px;color:var(--txt3);margin-top:1px">${sub}</div>`:''}</div>`;
+            const statusKpi=nE>0?'var(--red)':nA>0?'var(--amb)':'var(--grn)';
+
+            if(gs.cadocSel==='6334'){
+              return `<div class="gen-kpi-row">
+                ${kpi(pr.resumo6334?.totalArquivos||10,'Arquivos TXT','var(--cyn)','BACEN.ZIP')}
+                ${kpi(fmtN(pr.resumo6334?.conccredLinhas),'Transações CONCCRED','var(--blu)')}
+                ${kpi(fmtN(pr.resumo6334?.intercamLinhas),'Linhas INTERCAM','var(--pnk)')}
+                ${kpi(fmtN(pr.resumo6334?.segmentos),'Segmentos','var(--grn)')}
+                ${kpi(fmtN(pr.resumo6334?.contatos),'Contatos','var(--txt2)')}
+                ${kpi(nE,'Erros','var(--red)')}
+                ${kpi(nA,'Avisos','var(--amb)')}
+              </div>`;
+            } else if(gs.cadocSel==='3040' && pr.resumo){
+              const r=pr.resumo;
+              const indProv=r.totalVlrContr>0?(r.totalProv/r.totalVlrContr*100).toFixed(1):0;
+              const pct=(v,t)=>t>0?((v/t)*100).toFixed(1)+'%':'0%';
+              // Top 3 modalidades por valor
+              const topMods=Object.entries(r.porMod||{}).sort((a,b)=>b[1].vlr-a[1].vlr).slice(0,3);
+              // Distribuição de classificação de risco
+              const clasRisco=Object.entries(r.porClas||{}).filter(([,d])=>d.qtd>0).sort((a,b)=>b[1].vlr-a[1].vlr);
+              const clasRiscoHtml=clasRisco.slice(0,6).map(([cls,d])=>{
+                const isRuim=['D','E','F','G','H','HH'].includes(cls);
+                const cor=isRuim?'var(--red)':['AA','A','B'].includes(cls)?'var(--grn)':'var(--amb)';
+                const pctVal=r.totalVlrContr>0?Math.round(d.vlr/r.totalVlrContr*100):0;
+                return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--brd)">
+                  <span style="font-family:var(--mono);font-size:9.5px;font-weight:700;color:${cor};width:30px">${cls}</span>
+                  <div style="flex:1;height:5px;background:var(--bg3);border-radius:3px;overflow:hidden">
+                    <div style="height:100%;width:${pctVal}%;background:${cor};border-radius:3px"></div>
+                  </div>
+                  <span style="font-size:9px;font-family:var(--mono);color:var(--txt3);width:32px;text-align:right">${pctVal}%</span>
+                  <span style="font-size:9px;color:var(--txt3);width:28px;text-align:right">${d.qtd} op</span>
+                </div>`;
+              }).join('');
+              return `
+              <div class="gen-kpi-row" style="margin-bottom:10px">
+                ${kpi(fmtN(r.totalCli),'Clientes','var(--cyn)')}
+                ${kpi(fmtN(r.totalOps),'Operações','var(--blu)')}
+                ${kpi(fmtR(r.totalVlrContr),'Valor Contratado','var(--txt)')}
+                ${kpi(fmtR(r.saldoAVencer),'A Vencer','var(--grn)')}
+                ${kpi(fmtR(r.saldoVencido),'Saldo Vencido',r.saldoVencido>0?'var(--red)':'var(--grn)')}
+                ${kpi(fmtR(r.totalProv),'Provisão','var(--amb)',indProv+'% cart.')}
+                ${kpi(nE,'Erros',statusKpi)}
+                ${kpi(nA,'Avisos','var(--amb)')}
+              </div>
+              ${(clasRisco.length>0||topMods.length>0)?`
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+                ${clasRisco.length>0?`<div style="background:var(--bg3);border:1px solid var(--brd);border-radius:var(--r2);padding:10px 12px">
+                  <div style="font-size:9.5px;font-weight:700;color:var(--txt);font-family:var(--mono);margin-bottom:8px;letter-spacing:.5px">CLASSIFICAÇÃO DE RISCO</div>
+                  ${clasRiscoHtml}
+                </div>`:''}
+                ${topMods.length>0?`<div style="background:var(--bg3);border:1px solid var(--brd);border-radius:var(--r2);padding:10px 12px">
+                  <div style="font-size:9.5px;font-weight:700;color:var(--txt);font-family:var(--mono);margin-bottom:8px;letter-spacing:.5px">TOP MODALIDADES (COSIF)</div>
+                  ${topMods.map(([mod,d])=>{
+                    const pctVal=r.totalVlrContr>0?Math.round(d.vlr/r.totalVlrContr*100):0;
+                    return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid var(--brd)">
+                      <span style="font-family:var(--mono);font-size:9px;font-weight:700;color:var(--cyn);width:36px">${mod}</span>
+                      <div style="flex:1;height:5px;background:var(--bg4);border-radius:3px;overflow:hidden">
+                        <div style="height:100%;width:${pctVal}%;background:var(--blu);border-radius:3px"></div>
+                      </div>
+                      <span style="font-size:9px;font-family:var(--mono);color:var(--txt3);width:32px;text-align:right">${pctVal}%</span>
+                      <span style="font-size:9px;color:var(--txt3)">${fmtR(d.vlr)}</span>
+                    </div>`;
+                  }).join('')}
+                </div>`:''}
+              </div>`:''}`;
+            } else if(gs.cadocSel==='3044' && pr.resumo){
+              const r=pr.resumo;
+              return `<div class="gen-kpi-row">
+                ${kpi(fmtN(r.totalOps),'Operações','var(--cyn)')}
+                ${kpi(fmtN(r.nPagamentos),'Pagamentos','var(--grn)')}
+                ${kpi(fmtN(r.nConcessoes),'Concessões','var(--pnk)')}
+                ${kpi(fmtN(r.nCessoes),'Cessões','var(--amb)')}
+                ${kpi(fmtN(r.nExclusoes),'Exclusões','var(--txt3)')}
+                ${r.totalPag?kpi(fmtR(r.totalPag),'Total Pago','var(--grn)'):''}
+                ${r.totalConc?kpi(fmtR(r.totalConc),'Total Concedido','var(--pnk)'):''}
+                ${kpi(nE,'Erros',statusKpi)}
+                ${kpi(nA,'Avisos','var(--amb)')}
+              </div>`;
+            } else if(gs.cadocSel==='4010' && pr.resumo){
+              const r=pr.resumo;
+              const resultado=(r.receitas||0)-(r.despesas||0);
+              return `<div class="gen-kpi-row">
+                ${kpi(fmtN(r.totalContas),'Contas COSIF','var(--cyn)')}
+                ${kpi(fmtR(r.ativoTotal),'Ativo Total','var(--blu)')}
+                ${kpi(fmtR(r.passivoTotal),'Passivo+PL','var(--grn)')}
+                ${kpi(fmtR(r.receitas),'Receitas','var(--grn)')}
+                ${kpi(fmtR(r.despesas),'Despesas','var(--red)')}
+                ${kpi(fmtR(resultado),'Resultado',resultado>=0?'var(--grn)':'var(--red)')}
+                ${kpi(nE,'Erros',statusKpi)}
+                ${kpi(nA,'Avisos','var(--amb)')}
+              </div>`;
+            } else {
+              return `<div class="gen-kpi-row">
+                ${kpi(pr.resumo?.totalCli||0,'Clientes','var(--cyn)')}
+                ${kpi(pr.resumo?.totalOps||0,'Operações','var(--blu)')}
+                ${kpi(nE,'Erros',statusKpi)}
+                ${kpi(nA,'Avisos','var(--amb)')}
+              </div>`;
+            }
+          })()}
 
           ${(pr.erros||[]).length > 0 ? (function(){
             const todosErros = pr.erros || [];
