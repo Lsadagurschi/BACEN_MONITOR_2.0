@@ -4,10 +4,14 @@ import { usePathname } from 'next/navigation'
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const nav = [
-    { href: '/dashboard',          icon: '📊', label: 'Dashboard'     },
-    { href: '/dashboard/cadocs',   icon: '⚙️',  label: 'CADOCs'        },
-    { href: '/dashboard/entregas', icon: '📅', label: 'Entregas'      },
-    { href: '/dashboard/settings', icon: '🔧', label: 'Configurações' },
+    { href: '/dashboard',            icon: '📊', label: 'Dashboard'       },
+    { href: '/dashboard/cadocs',     icon: '⚙️',  label: 'CADOCs'          },
+    { href: '/dashboard/entregas',   icon: '📅', label: 'Entregas'        },
+    { href: '/dashboard/pagamentos', icon: '💳', label: 'Meios de Pgto'   },
+    { href: '/dashboard/normas',     icon: '📰', label: 'Normas BCB'      },
+    { href: '/dashboard/ia',         icon: '🤖', label: 'Análise IA'      },
+    { href: '/dashboard/links',      icon: '🔗', label: 'Links Úteis'     },
+    { href: '/dashboard/settings',   icon: '🔧', label: 'Configurações'   },
   ]
   // On the CADOCs page, give full height to the iframe
   const isCadocs = pathname.startsWith('/dashboard/cadocs')

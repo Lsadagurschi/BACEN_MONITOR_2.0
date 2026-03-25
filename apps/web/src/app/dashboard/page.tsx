@@ -308,11 +308,14 @@ export default function DashboardPage() {
       </div>
 
       {/* Links rápidos */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
         {[
-          { href: '/dashboard/cadocs',   icon: '⚙', title: 'Gerar CADOC',       desc: 'Geração, validação e download' },
-          { href: '/dashboard/entregas', icon: '📅', title: 'Calendário',         desc: 'Prazos regulatórios BCB'      },
-          { href: '/dashboard/settings', icon: '🏦', title: 'Configurações',      desc: 'Dados da instituição'         },
+          { href: '/dashboard/cadocs',     icon: '⚙️',  title: 'Gerar CADOC',       desc: 'Geração, validação e download' },
+          { href: '/dashboard/entregas',   icon: '📅', title: 'Calendário',          desc: 'Prazos regulatórios BCB'      },
+          { href: '/dashboard/pagamentos', icon: '💳', title: 'CADOCs por Segmento', desc: 'Obrigações por porte da IF'   },
+          { href: '/dashboard/normas',     icon: '📰', title: 'Normas BCB',          desc: 'Atualizações regulatórias'    },
+          { href: '/dashboard/ia',         icon: '🤖', title: 'Análise IA',          desc: 'Insights regulatórios com IA' },
+          { href: '/dashboard/links',      icon: '🔗', title: 'Links Úteis',         desc: 'BCB, STA, SGS, COSIF...'     },
         ].map(l => (
           <a key={l.href} href={l.href} style={{
             display: 'flex', alignItems: 'center', gap: 14, padding: '14px 18px',
@@ -326,6 +329,49 @@ export default function DashboardPage() {
             </div>
           </a>
         ))}
+      </div>
+
+      {/* Indicadores econômicos BCB */}
+      <div style={{ background: '#fff', border: '1px solid #d1c9b8', borderRadius: 12, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <h2 style={{ fontSize: 13, fontWeight: 700, color: '#0a0f1e', margin: 0 }}>
+            Indicadores Econômicos BCB
+          </h2>
+          <a href="https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json" target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 10, color: '#0a7c5c', textDecoration: 'none', fontWeight: 600 }}>
+            API SGS BCB →
+          </a>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+          {[
+            { code: '432',  label: 'Selic Meta',     valor: '13,25% a.a.',  var: '▼ -0,25',  cor: '#0891b2', desc: 'Taxa básica de juros' },
+            { code: '433',  label: 'IPCA Acum. 12m', valor: '5,06%',        var: '▲ +0,14',  cor: '#f97316', desc: 'Inflação oficial' },
+            { code: '1',    label: 'PTAX (USD)',      valor: 'R$ 5,89',      var: '▼ -0,02',  cor: '#22c55e', desc: 'Câmbio comercial' },
+            { code: '24369',label: 'CDI a.a.',        valor: '13,15% a.a.',  var: '▼ -0,25',  cor: '#7c3aed', desc: 'Taxa interbancária' },
+          ].map(ind => (
+            <div key={ind.code} style={{
+              padding: '12px 14px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10,
+              borderLeft: `3px solid ${ind.cor}`,
+            }}>
+              <div style={{ fontSize: 10, color: '#9ca3af', fontFamily: 'Courier New', marginBottom: 4 }}>
+                SGS·{ind.code} · {ind.desc}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#0a0f1e', fontFamily: 'Courier New, monospace' }}>
+                {ind.valor}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#0a0f1e' }}>{ind.label}</span>
+                <span style={{ fontSize: 10, color: ind.var.startsWith('▲') ? '#dc2626' : '#15803d', fontFamily: 'Courier New' }}>
+                  {ind.var}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 10, fontSize: 10, color: '#9ca3af' }}>
+          Dados ilustrativos — integre com a API SGS do BCB em Configurações para valores em tempo real.
+          <a href="/dashboard/links" style={{ color: '#0a7c5c', textDecoration: 'none', marginLeft: 6, fontWeight: 600 }}>Ver links API →</a>
+        </div>
       </div>
     </div>
   )

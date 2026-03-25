@@ -109,6 +109,7 @@ const CADOCS_POR_SEGMENTO: Record<string, { code: string; nome: string; per: str
 }
 
 const LS_SETTINGS_KEY = 'bm_company_settings_v1'
+const LS_AI_KEY = 'bm_ai_config_v1'
 
 interface CompanySettings {
   nomeEmpresa: string
@@ -116,6 +117,12 @@ interface CompanySettings {
   ispb: string
   segmento: string
   updatedAt: string
+}
+
+interface AiConfig {
+  provider: string
+  apiKey: string
+  model: string
 }
 
 function loadSettings(): CompanySettings | null {
@@ -129,12 +136,21 @@ function saveSettings(s: CompanySettings) {
   localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(s))
 }
 
+const AI_PROVIDERS = [
+  { id: 'openai',    label: 'OpenAI (GPT-4o / GPT-4)',  placeholder: 'sk-...', models: ['gpt-4o','gpt-4-turbo','gpt-3.5-turbo'] },
+  { id: 'anthropic', label: 'Anthropic (Claude)',        placeholder: 'sk-ant-...', models: ['claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5'] },
+  { id: 'google',    label: 'Google Gemini',             placeholder: 'AIza...', models: ['gemini-2.0-flash','gemini-1.5-pro'] },
+]
+
 export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [segmento, setSegmento] = useState('s3')
   const [nomeEmpresa, setNomeEmpresa] = useState('')
   const [cnpj, setCnpj] = useState('')
   const [ispb, setIspb] = useState('')
+  const [aiConfig, setAiConfig] = useState<AiConfig>({ provider: 'openai', apiKey: '', model: 'gpt-4o' })
+  const [showKey, setShowKey] = useState(false)
+  const [aiSaved, setAiSaved] = useState(false)
 
   useEffect(() => {
     const s = loadSettings()
@@ -144,6 +160,10 @@ export default function SettingsPage() {
       setCnpj(s.cnpj || '')
       setIspb(s.ispb || '')
     }
+    try {
+      const rawAi = localStorage.getItem(LS_AI_KEY)
+      if (rawAi) setAiConfig(JSON.parse(rawAi))
+    } catch {}
   }, [])
 
   function handleSave() {
@@ -158,6 +178,14 @@ export default function SettingsPage() {
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
   }
+
+  function handleSaveAi() {
+    localStorage.setItem(LS_AI_KEY, JSON.stringify(aiConfig))
+    setAiSaved(true)
+    setTimeout(() => setAiSaved(false), 3000)
+  }
+
+  const aiProvider = AI_PROVIDERS.find(p => p.id === aiConfig.provider) || AI_PROVIDERS[0]
 
   const tipoSel = SEGMENTOS.flatMap(g => g.tipos).find(t => t.id === segmento)
   const cadocsObrigados = CADOCS_POR_SEGMENTO[segmento] || []
@@ -269,7 +297,7 @@ export default function SettingsPage() {
       </div>
 
       {/* ── Botão salvar ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 32 }}>
         <button onClick={handleSave} style={{
           padding: '10px 24px', borderRadius: 8, background: '#0a7c5c', color: '#fff', border: 'none',
           fontSize: 13, fontWeight: 700, cursor: 'pointer', transition: 'background .15s',
@@ -281,6 +309,82 @@ export default function SettingsPage() {
             ✓ Configurações salvas! Dashboard e entregas atualizados.
           </span>
         )}
+      </div>
+
+      {/* ── Configuração de IA ── */}
+      <div style={{ background: '#fff', border: '1px solid #d1c9b8', borderRadius: 12, padding: 24, marginBottom: 24 }}>
+        <h2 style={{ fontSize: 14, fontWeight: 700, color: '#0a0f1e', marginBottom: 4 }}>
+          Integração com IA — Análise Regulatória
+        </h2>
+        <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 18, lineHeight: 1.6 }}>
+          Conecte sua própria chave de API de IA para obter análises de conformidade, alertas de risco e recomendações personalizadas.
+          A chave fica armazenada apenas no seu navegador (localStorage) e nunca é enviada aos nossos servidores.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 14 }}>
+          <div>
+            <label style={lbl}>Provedor de IA</label>
+            <select style={{ ...inp }} value={aiConfig.provider}
+              onChange={e => setAiConfig(c => ({ ...c, provider: e.target.value, model: AI_PROVIDERS.find(p=>p.id===e.target.value)?.models[0] || '' }))}>
+              {AI_PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Modelo</label>
+            <select style={{ ...inp }} value={aiConfig.model}
+              onChange={e => setAiConfig(c => ({ ...c, model: e.target.value }))}>
+              {aiProvider.models.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Chave de API</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                type={showKey ? 'text' : 'password'}
+                style={{ ...inp, fontFamily: 'Courier New, monospace', fontSize: 11.5, flex: 1 }}
+                placeholder={aiProvider.placeholder}
+                value={aiConfig.apiKey}
+                onChange={e => setAiConfig(c => ({ ...c, apiKey: e.target.value }))}
+              />
+              <button onClick={() => setShowKey(!showKey)} style={{
+                padding: '6px 10px', borderRadius: 6, border: '1px solid #d1c9b8',
+                background: '#f9fafb', cursor: 'pointer', fontSize: 12, flexShrink: 0,
+              }}>{showKey ? '🙈' : '👁️'}</button>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button onClick={handleSaveAi} style={{
+            padding: '8px 20px', borderRadius: 8, background: '#7c3aed', color: '#fff',
+            border: 'none', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+          }}>
+            🤖 Salvar Config. IA
+          </button>
+          {aiSaved && <span style={{ fontSize: 11.5, color: '#7c3aed', fontWeight: 600 }}>✓ Configuração de IA salva!</span>}
+          <a href="/dashboard/ia" style={{ fontSize: 11.5, color: '#0a7c5c', textDecoration: 'none', fontWeight: 600 }}>
+            → Ir para Análise IA
+          </a>
+        </div>
+      </div>
+
+      {/* ── Links rápidos ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        {[
+          { href: '/dashboard/pagamentos', icon: '💳', title: 'CADOCs por Segmento', desc: 'Obrigações por porte da IF'  },
+          { href: '/dashboard/normas',     icon: '📰', title: 'Normas BCB',          desc: 'Atualizações regulatórias'  },
+          { href: '/dashboard/links',      icon: '🔗', title: 'Links Úteis',         desc: 'Portais BCB, STA, SGS...'   },
+        ].map(l => (
+          <a key={l.href} href={l.href} style={{
+            display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
+            background: '#fff', border: '1px solid #d1c9b8', borderRadius: 10,
+            textDecoration: 'none',
+          }}>
+            <span style={{ fontSize: 20 }}>{l.icon}</span>
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: '#0a0f1e' }}>{l.title}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>{l.desc}</div>
+            </div>
+          </a>
+        ))}
       </div>
     </div>
   )
