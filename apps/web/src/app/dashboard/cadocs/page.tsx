@@ -723,7 +723,7 @@ export default function CadocsPage(){
 
   const download=()=>{
     if(!result)return
-    if(sel==='6334'&&result.txts){Object.entries(result.txts).forEach(([k,v],i)=>{setTimeout(()=>{const b=new Blob([v],{type:'text/plain;charset=iso-8859-1'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=k.trim()+'.TXT';a.click();URL.revokeObjectURL(a.href)},i*80)})}
+    if(sel==='6334'&&result.txts){Object.entries(result.txts).forEach(([k,v],i)=>{setTimeout(()=>{const b=new Blob([String(v)],{type:'text/plain;charset=iso-8859-1'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=k.trim()+'.TXT';a.click();URL.revokeObjectURL(a.href)},i*80)})}
     else{const b=new Blob([result.content],{type:(sel==='3044'?'application/json':'application/xml')+';charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=result.filename;a.click();URL.revokeObjectURL(a.href)}
     setStep(4);setAudit(prev=>[{ts:new Date().toLocaleString('pt-BR'),acao:`Download CADOC ${sel}`,cadoc:sel,cnpj:'',dtBase:'',status:'EXPORTADO',nErros:0,nAvisos:0},...prev].slice(0,50))
   }
@@ -731,7 +731,7 @@ export default function CadocsPage(){
   const nErros=result?.erros.filter(e=>e.tipo!=='aviso').length??0
   const nAvisos=result?.erros.filter(e=>e.tipo==='aviso').length??0
   const stC=!result?C.grn:nErros>0?C.red:nAvisos>0?C.amb:C.grn
-  const stL=!result?'':`${nErros>0?'✗':nAvisos>0?'⚠':'✓'} ${nErros>0?`${nErros} erro(s)`:nAvisos>0?`${nAvisos} aviso(s)`:'APROVADO'}`
+  const stL=!result?'':(nErros>0?'✗':nAvisos>0?'⚠':'✓')+' '+(nErros>0?(nErros+' erro(s)'):nAvisos>0?(nAvisos+' aviso(s)'):'APROVADO')
   const lvcMap:Record<string,{bg:string,brd:string,col:string}>={idle:{bg:'#f9fafb',brd:C.brd,col:C.txt3},ok:{bg:'#f0fdf4',brd:'#22c55e',col:'#166534'},warn:{bg:'#fffbeb',brd:'#f59e0b',col:'#92400e'},err:{bg:'#fef2f2',brd:C.red,col:'#991b1b'}}
   const lvc=lvcMap[lv.state]||lvcMap.idle
 
@@ -865,14 +865,14 @@ export default function CadocsPage(){
               </div>
               <div style={{padding:12}}>
                 <div style={{display:'flex',gap:16,marginBottom:10,alignItems:'center',flexWrap:'wrap'}}>
-                  {(['Erros',nErros,nErros>0?C.red:C.grn],['Avisos',nAvisos,nAvisos>0?C.amb:C.grn]) .map(([l,v,c])=>(
+                {([['Erros',nErros,nErros>0?C.red:C.grn],['Avisos',nAvisos,nAvisos>0?C.amb:C.grn]] as [string,number,string][]).map(([l,v,c])=>(
                     <div key={l as string} style={{textAlign:'center',minWidth:50}}>
                       <div style={{fontSize:22,fontWeight:900,color:c as string,fontFamily:'monospace'}}>{v as number}</div>
                       <div style={{fontSize:9,color:C.txt3}}>{l as string}</div>
                     </div>
                   ))}
                   {(nErros>0||nAvisos>0)&&<button onClick={()=>{
-                    const rows=[['Severidade','Código','Mensagem','Operação','Referência BCB'].join(';'),...(result.erros||[]).map(e=>`"${e.tipo==='erro'?'ERRO':'AVISO'}";"${e.cod}";"${e.msg.replace(/"/g,'''''"''''')}";"${e.op||''}";"${e.ruleRef||''}"`)];const b=new Blob(['\uFEFF'+rows.join('\n')],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`criticas_scr3040_${sel}.csv`;a.click();URL.revokeObjectURL(a.href)}} style={{marginLeft:'auto',fontSize:10,padding:'4px 10px',borderRadius:5,border:`1px solid ${C.grn}`,background:C.grnb,cursor:'pointer',color:C.grn,outline:'none'}}>⬇ CSV Críticas BCB</button>}
+                    const esc=(s:string)=>s.replace(/"/g,'""');const rows=[['Severidade','Código','Mensagem','Operação','Referência BCB'].join(';'),...(result.erros||[]).map(e=>'"'+(e.tipo==='erro'?'ERRO':'AVISO')+'";'+'"'+esc(e.cod||'')+'";'+'"'+esc(e.msg||'')+'";'+'"'+esc(e.op||'')+'";'+'"'+esc(e.ruleRef||'')+'"')];const b=new Blob(['\uFEFF'+rows.join('\n')],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='criticas_scr3040_'+sel+'.csv';a.click();URL.revokeObjectURL(a.href)}} style={{marginLeft:'auto',fontSize:10,padding:'4px 10px',borderRadius:5,border:`1px solid ${C.grn}`,background:C.grnb,cursor:'pointer',color:C.grn,outline:'none'}}>⬇ CSV Críticas BCB</button>}
                 </div>
                 {resTab==='resumo'&&<div style={{fontSize:11,color:C.txt3}}>{nErros===0&&nAvisos===0?<span style={{color:C.grn,fontWeight:700}}>✓ Arquivo válido — nenhuma crítica encontrada. Pronto para envio ao STA.</span>:<span>Ver aba <strong>Erros/Avisos</strong> para detalhamento das críticas BCB.</span>}</div>}
                 {resTab==='erros'&&(
@@ -893,7 +893,7 @@ export default function CadocsPage(){
                 )}
                 {resTab==='preview'&&(
                   <div>
-                    {sel==='6334'&&result.txts&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:6,marginBottom:10}}>{Object.entries(result.txts).map(([k,v])=><div key={k} style={{padding:'7px 10px',background:C.bg3,border:`1px solid ${C.grn}`,borderRadius:6,display:'flex',alignItems:'center',gap:6}}><span>✅</span><div><div style={{fontFamily:'monospace',fontSize:9.5,fontWeight:700,color:C.txt}}>{k.trim()}.TXT</div><div style={{fontSize:8,color:C.txt3}}>{v.split('\n').filter(l=>l.trim()).length} linha(s)</div></div></div>)}</div>}
+                    {sel==='6334'&&result.txts&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:6,marginBottom:10}}>{Object.entries(result.txts).map(([k,v])=><div key={k} style={{padding:'7px 10px',background:C.bg3,border:`1px solid ${C.grn}`,borderRadius:6,display:'flex',alignItems:'center',gap:6}}><span>✅</span><div><div style={{fontFamily:'monospace',fontSize:9.5,fontWeight:700,color:C.txt}}>{k.trim()}.TXT</div><div style={{fontSize:8,color:C.txt3}}>{String(v).split('\n').filter((l:string)=>l.trim()).length} linha(s)</div></div></div>)}</div>}
                     {sel!=='6334'&&<pre style={{padding:'10px',fontFamily:'"JetBrains Mono","Courier New",monospace',fontSize:10,color:'#94a3b8',background:'#0f172a',borderRadius:8,maxHeight:220,overflowY:'auto',lineHeight:1.6,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>{result.content.substring(0,2500)}{result.content.length>2500?'\n…':''}</pre>}
                   </div>
                 )}
@@ -939,7 +939,7 @@ export default function CadocsPage(){
                   <span style={{fontFamily:'monospace',fontSize:9,color:C.txt3,minWidth:130}}>{h.ts}</span>
                   <span style={{fontSize:10,color:C.txt,flex:1}}>{h.acao}</span>
                   {h.cnpj&&<span style={{fontFamily:'monospace',fontSize:9,color:C.txt3}}>{h.cnpj} · {h.dtBase}</span>}
-                  <span style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:3,fontFamily:'monospace',background:h.status==='APROVADO'?C.grnb:h.status==='REPROVADO'?C.redb:h.status==='EXPORTADO'?C.blub:C.ambb,color:h.status==='APROVADO'?C.grn:h.status==='REPROVADO'?C.red:h.status==='EXPORTADO'?C.blu:C.amb}}>{h.status}{h.nErros>0?` · ${h.nErros}E`:''}{h.nAvisos>0?` ${h.nAvisos}A':''}</span>
+                  <span style={{fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:3,fontFamily:'monospace',background:h.status==='APROVADO'?C.grnb:h.status==='REPROVADO'?C.redb:h.status==='EXPORTADO'?C.blub:C.ambb,color:h.status==='APROVADO'?C.grn:h.status==='REPROVADO'?C.red:h.status==='EXPORTADO'?C.blu:C.amb}}>{h.status}{h.nErros>0?' · '+h.nErros+'E':''}{h.nAvisos>0?' '+h.nAvisos+'A':''}</span>
                 </div>
               ))}
             </div>
