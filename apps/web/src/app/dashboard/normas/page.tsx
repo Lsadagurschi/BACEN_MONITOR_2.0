@@ -1,343 +1,376 @@
 'use client'
 import { useState, useRef, useEffect, useCallback } from 'react'
 
+// ─── tipos ───────────────────────────────────────────────────────────────────
 interface RssItem { titulo:string; link:string; descricao:string; data:string; guid:string }
-interface Norma { id:number; _rawId:string; tipo:string; numero:string; titulo:string; resumo:string; data_pub:string; area:string; urgencia:string; url:string; tags:string[]; _feedId:string }
-interface CardState { open:boolean; tab:string; analise?:string; loading?:boolean }
+interface Norma { id:number; tipo:string; numero:string; titulo:string; resumo:string; data_pub:string; area:string; urgencia:string; url:string }
+interface CardSt { open:boolean; tab:'analise'|'resumo'; analise?:string; loading?:boolean }
 
-const BCB_BASE = 'https://www.bcb.gov.br/api/feed/app'
-const BCB_NORMA_FEEDS = [
-  { id:'normativos',       url:BCB_BASE+'/normativos/normativos',       supAno:true },
-  { id:'demaisnormativos', url:BCB_BASE+'/normativos/demaisnormativos', supAno:true },
-  { id:'cartascirculares', url:BCB_BASE+'/normativos/cartascirculares', supAno:true },
+// ─── feeds BCB ───────────────────────────────────────────────────────────────
+const FEEDS = [
+  { id:'normativos',       url:'https://www.bcb.gov.br/api/feed/app/normativos/normativos',       supAno:true },
+  { id:'demaisnormativos', url:'https://www.bcb.gov.br/api/feed/app/normativos/demaisnormativos', supAno:true },
+  { id:'cartascirculares', url:'https://www.bcb.gov.br/api/feed/app/normativos/cartascirculares', supAno:true },
 ]
+
 const AREAS = [
-  {id:'all',label:'Todas Vigentes',ico:'◈'},
-  {id:'pagamentos',label:'Pagamentos',ico:'💳'},
-  {id:'crédito',label:'Crédito / SCR',ico:'📊'},
-  {id:'tecnologia',label:'Tecnologia',ico:'⚡'},
-  {id:'câmbio',label:'Câmbio / PSAV',ico:'🔄'},
-  {id:'capital',label:'Capital',ico:'🏛'},
-]
-const TIPO_CFG: Record<string,{color:string,bg:string}> = {
-  'Resolução BCB':{color:'#0a7c5c',bg:'rgba(10,124,92,.10)'},
-  'Instrução Normativa BCB':{color:'#1d5fcc',bg:'rgba(29,95,204,.10)'},
-  'Resolução CMN':{color:'#c0392b',bg:'rgba(192,57,43,.10)'},
-  'Resolução Conjunta':{color:'#7c3aed',bg:'rgba(124,58,237,.10)'},
-  'Circular BCB':{color:'#b45309',bg:'rgba(180,83,9,.10)'},
-  'Carta Circular BCB':{color:'#b45309',bg:'rgba(180,83,9,.10)'},
-  'Comunicado BCB':{color:'#b45309',bg:'rgba(180,83,9,.08)'},
-}
-const SUGESTOES = [
-  'Quais CADOCs são obrigatórios para credenciadores?',
-  'O que muda para subcredenciadores com a Res. 522?',
-  'CADOC 3044 substitui o 3040?',
-  'Capital mínimo para SCD com conta Pix?',
-  'Quais os prazos críticos de 2026 para IPs?',
+  { id:'all',       l:'Todas',            ico:'◈' },
+  { id:'pagamentos', l:'Pagamentos',       ico:'💳' },
+  { id:'crédito',   l:'Crédito / SCR',    ico:'📊' },
+  { id:'câmbio',    l:'Câmbio / PSAV',    ico:'🔄' },
+  { id:'capital',   l:'Capital',          ico:'🏛' },
 ]
 
-function parseRSSXml(xmlStr: string): RssItem[] {
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(xmlStr, 'text/xml')
-  function cleanText(el: Element|null, maxLen?: number) {
+const TIPO_COR: Record<string,string> = {
+  'Resolução BCB':'#0d6e52', 'Instrução Normativa BCB':'#1d5fcc',
+  'Resolução CMN':'#c0392b', 'Resolução Conjunta':'#7c3aed',
+  'Circular BCB':'#b45309',  'Carta Circular BCB':'#b45309', 'Comunicado BCB':'#6b7280',
+}
+
+// ─── parser RSS/Atom ──────────────────────────────────────────────────────────
+function parseXML(xml: string): RssItem[] {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  function txt(el: Element | null, max = 0) {
     if (!el) return ''
-    let raw = el.textContent || ''
-    if (raw.includes('<')) {
-      try { const tmp = new DOMParser().parseFromString(raw,'text/html'); raw = tmp.body.textContent||'' }
-      catch { raw = raw.replace(/<[^>]+>/g,'') }
-    }
-    const clean = raw.replace(/\s+/g,' ').trim()
-    return maxLen ? clean.substring(0,maxLen) : clean
+    let s = el.textContent || ''
+    if (s.includes('<')) { try { s = new DOMParser().parseFromString(s,'text/html').body.textContent||'' } catch { s = s.replace(/<[^>]+>/g,'') } }
+    s = s.replace(/\s+/g,' ').trim()
+    return max ? s.slice(0,max) : s
   }
-  const items: RssItem[] = []
-  doc.querySelectorAll('entry').forEach(el => {
-    const linkEl = el.querySelector("link[rel='alternate'], link")
-    items.push({ titulo:cleanText(el.querySelector('title')), link:linkEl?.getAttribute('href')||linkEl?.textContent?.trim()||'', descricao:cleanText(el.querySelector('content, summary'),250), data:el.querySelector('updated, published')?.textContent?.trim()||'', guid:el.querySelector('id')?.textContent?.trim()||'' })
+  const out: RssItem[] = []
+  doc.querySelectorAll('entry').forEach(e => {
+    const lk = e.querySelector("link[rel='alternate'], link")
+    out.push({ titulo:txt(e.querySelector('title')), link:lk?.getAttribute('href')||lk?.textContent?.trim()||'', descricao:txt(e.querySelector('content,summary'),240), data:e.querySelector('updated,published')?.textContent?.trim()||'', guid:e.querySelector('id')?.textContent?.trim()||'' })
   })
-  if (!items.length) {
-    doc.querySelectorAll('item').forEach(el => {
-      items.push({ titulo:cleanText(el.querySelector('title')), link:el.querySelector('link')?.textContent?.trim()||'', descricao:cleanText(el.querySelector('description'),250), data:el.querySelector('pubDate')?.textContent?.trim()||'', guid:el.querySelector('guid')?.textContent?.trim()||'' })
-    })
-  }
-  return items
+  if (!out.length) doc.querySelectorAll('item').forEach(e => {
+    out.push({ titulo:txt(e.querySelector('title')), link:e.querySelector('link')?.textContent?.trim()||'', descricao:txt(e.querySelector('description'),240), data:e.querySelector('pubDate')?.textContent?.trim()||'', guid:e.querySelector('guid')?.textContent?.trim()||'' })
+  })
+  return out
 }
 
-const _reg: Record<string,number> = {}
-function rssToNorma(item: RssItem, feedId: string): Norma {
-  const t = item.titulo||''
+// ─── mapeador RSS → Norma ─────────────────────────────────────────────────────
+let _nextId = 1000
+const _ids: Record<string,number> = {}
+function toNorma(it: RssItem): Norma {
+  const t = it.titulo
   let tipo = 'Normativo BCB'
-  if (/Resolu[çc][ãa]o CMN/i.test(t)) tipo='Resolução CMN'
-  else if (/Resolu[çc][ãa]o Conjunta/i.test(t)) tipo='Resolução Conjunta'
-  else if (/Resolu[çc][ãa]o BCB/i.test(t)) tipo='Resolução BCB'
-  else if (/Instru[çc][ãa]o Normativa/i.test(t)) tipo='Instrução Normativa BCB'
-  else if (/Circular/i.test(t)&&!/Carta/i.test(t)) tipo='Circular BCB'
-  else if (/Carta Circular/i.test(t)) tipo='Carta Circular BCB'
-  else if (/Comunicado/i.test(t)) tipo='Comunicado BCB'
-  const txt=(t+' '+(item.descricao||'')).toLowerCase()
-  let urgencia='normal'
-  if (/pix|subcredenci|autoriza[çc][ãa]o|psav|liquidação centralizada|baas/i.test(txt)) urgencia='critica'
-  else if (/câmbio|cambio|cripto|ativo virtual|capital m[ií]nimo|credenciador|emissor/i.test(txt)) urgencia='alta'
-  let area='outros'
-  if (/pix|pagamento|credenciador|emissor|arranjo|subcredenci|baas/i.test(txt)) area='pagamentos'
-  else if (/cambio|câmbio|moeda estrangeira/i.test(txt)) area='câmbio'
-  else if (/cr[eé]dito|scr|cadoc 30/i.test(txt)) area='crédito'
-  else if (/capital|basileia|pr\b|rwa/i.test(txt)) area='capital'
-  else if (/ativo virtual|cripto|psav/i.test(txt)) area='tecnologia'
-  const rawId=item.guid||item.link||item.titulo||Math.random().toString()
-  if (!_reg[rawId]) _reg[rawId]=Object.keys(_reg).length+1000
-  const numMatch=t.match(/[Nn][ºo°]?\s*(\d+)/)
-  return { id:_reg[rawId], _rawId:rawId, tipo, numero:numMatch?.[1]||'', titulo:t.replace(/^BC\s*-\s*/,'').trim(), resumo:item.descricao||'', data_pub:(item.data||'').substring(0,10), area, urgencia, url:item.link||'', tags:[tipo], _feedId:feedId }
+  if (/Resolu[çc][ãa]o CMN/i.test(t))       tipo = 'Resolução CMN'
+  else if (/Resolu[çc][ãa]o Conjunta/i.test(t)) tipo = 'Resolução Conjunta'
+  else if (/Resolu[çc][ãa]o BCB/i.test(t))  tipo = 'Resolução BCB'
+  else if (/Instru[çc][ãa]o Normativa/i.test(t)) tipo = 'Instrução Normativa BCB'
+  else if (/Carta Circular/i.test(t))        tipo = 'Carta Circular BCB'
+  else if (/Circular/i.test(t))              tipo = 'Circular BCB'
+  else if (/Comunicado/i.test(t))            tipo = 'Comunicado BCB'
+  const txt = (t + ' ' + it.descricao).toLowerCase()
+  let urgencia = 'normal'
+  if (/pix|subcredenci|psav|liquidação centralizada|baas/i.test(txt)) urgencia = 'critica'
+  else if (/câmbio|cripto|ativo virtual|capital m[ií]nimo|credenciador|emissor/i.test(txt)) urgencia = 'alta'
+  let area = 'outros'
+  if (/pix|pagamento|credenciador|emissor|arranjo|subcredenci/i.test(txt)) area = 'pagamentos'
+  else if (/cambio|câmbio|moeda estrangeira/i.test(txt)) area = 'câmbio'
+  else if (/cr[eé]dito|scr|cadoc 30/i.test(txt)) area = 'crédito'
+  else if (/capital|basileia|rwa/i.test(txt)) area = 'capital'
+  else if (/ativo virtual|cripto|psav/i.test(txt)) area = 'câmbio'
+  const rawId = it.guid || it.link
+  if (!_ids[rawId]) _ids[rawId] = _nextId++
+  const num = t.match(/[Nn][ºo°]?\s*(\d+)/)?.[1] || ''
+  return { id:_ids[rawId], tipo, numero:num, titulo:t.replace(/^BC\s*-\s*/,'').trim(), resumo:it.descricao, data_pub:(it.data||'').slice(0,10), area, urgencia, url:it.link }
 }
 
-export default function NormasPage() {
-  const [rssData, setRssData] = useState<Record<string,{items:RssItem[];loading:boolean;error:string|null}>>({})
-  const [area, setArea] = useState('all')
-  const [urgFilt, setUrgFilt] = useState('')
-  const [tipos, setTipos] = useState<string[]>([])
-  const [q, setQ] = useState('')
-  const [cards, setCards] = useState<Record<number,CardState>>({})
-  const [chatMsgs, setChatMsgs] = useState<{role:string;content:string}[]>([])
-  const [chatInput, setChatInput] = useState('')
-  const [chatBusy, setChatBusy] = useState(false)
-  const [chatOpen, setChatOpen] = useState(false)
-  const [rssAno, setRssAno] = useState(new Date().getFullYear())
-  const chatRef = useRef<HTMLDivElement>(null)
-  const G = '#0a7c5c'
-  const getKey = () => typeof window!=='undefined'?(localStorage.getItem('bm_api_key')||''):''
+function fmtData(d: string) {
+  try { return new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'}) } catch { return d }
+}
 
-  const fetchFeed = useCallback(async (feed: typeof BCB_NORMA_FEEDS[0], ano?: number) => {
-    setRssData(prev=>({...prev,[feed.id]:{items:[],loading:true,error:null}}))
-    const url = feed.supAno ? `${feed.url}?ano=${ano||rssAno}` : feed.url
-    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),12000)
+// ─── componente ───────────────────────────────────────────────────────────────
+export default function NormasPage() {
+  const [feeds, setFeeds]   = useState<Record<string,{items:RssItem[];loading:boolean;error:string}>>({})
+  const [area, setArea]     = useState('all')
+  const [urgFilt, setUrgF]  = useState('')
+  const [q, setQ]           = useState('')
+  const [tipos, setTipos]   = useState<string[]>([])
+  const [cards, setCards]   = useState<Record<number,CardSt>>({})
+  const [ano, setAno]       = useState(new Date().getFullYear())
+  const [chat, setChat]     = useState(false)
+  const [msgs, setMsgs]     = useState<{r:string;c:string}[]>([])
+  const [inp, setInp]       = useState('')
+  const [busy, setBusy]     = useState(false)
+  const chatEl              = useRef<HTMLDivElement>(null)
+
+  const getKey = () => typeof window !== 'undefined' ? (localStorage.getItem('bm_api_key')||'') : ''
+
+  const fetchFeed = useCallback(async (feed: typeof FEEDS[0], a?: number) => {
+    setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
+    const url = feed.supAno ? `${feed.url}?ano=${a||ano}` : feed.url
+    const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 12000)
     try {
-      const r=await fetch(url,{signal:ctrl.signal,headers:{Accept:'application/atom+xml,*/*'}})
+      const r = await fetch(url, { signal:ctrl.signal, headers:{Accept:'application/atom+xml,*/*'} })
       clearTimeout(timer)
-      if (r.ok) { const txt=await r.text(); const items=parseRSSXml(txt); setRssData(prev=>({...prev,[feed.id]:{items,loading:false,error:items.length?null:'Sem itens'}})) }
-      else setRssData(prev=>({...prev,[feed.id]:{items:[],loading:false,error:`HTTP ${r.status}`}}))
+      if (r.ok) { const txt = await r.text(); const items = parseXML(txt); setFeeds(prev=>({...prev,[feed.id]:{items,loading:false,error:items.length?'':'Feed vazio'}})) }
+      else setFeeds(prev=>({...prev,[feed.id]:{items:[],loading:false,error:`HTTP ${r.status}`}}))
     } catch(e:any) {
       clearTimeout(timer)
-      const msg=e.name==='AbortError'?'Timeout':e.message?.includes('fetch')?'Bloqueado pelo sandbox — abra localmente para feeds ao vivo':e.message
-      setRssData(prev=>({...prev,[feed.id]:{items:[],loading:false,error:msg}}))
+      setFeeds(prev=>({...prev,[feed.id]:{items:[],loading:false,error:e.name==='AbortError'?'Timeout':'Bloqueado pelo sandbox — abra localmente'}}))
     }
-  },[rssAno])
+  }, [ano])
 
-  const fetchAll=useCallback(()=>{ BCB_NORMA_FEEDS.forEach(f=>fetchFeed(f)) },[fetchFeed])
-  useEffect(()=>{ fetchAll() },[])
+  const fetchAll = useCallback(() => FEEDS.forEach(f => fetchFeed(f)), [fetchFeed])
+  useEffect(() => { fetchAll() }, [])
 
-  const allNormas: Norma[] = (()=>{
-    const seen=new Set<string>(); const items: Norma[]=[]
-    BCB_NORMA_FEEDS.forEach(feed=>{ const d=rssData[feed.id]; if(d?.items?.length){ d.items.forEach(it=>{ const g=it.guid||it.link||it.titulo; if(!seen.has(g)){ seen.add(g); items.push(rssToNorma(it,feed.id)) } }) } })
-    return items.sort((a,b)=>(b.data_pub||'').localeCompare(a.data_pub||''))
+  // monta normas a partir dos feeds
+  const allNormas: Norma[] = (() => {
+    const seen = new Set<string>(); const out: Norma[] = []
+    FEEDS.forEach(f => { feeds[f.id]?.items?.forEach(it => { const g=it.guid||it.link; if(!seen.has(g)){seen.add(g);out.push(toNorma(it))} }) })
+    return out.sort((a,b) => (b.data_pub||'').localeCompare(a.data_pub||''))
   })()
 
-  const isLoading=BCB_NORMA_FEEDS.some(f=>rssData[f.id]?.loading)
-  const hasError=!isLoading&&BCB_NORMA_FEEDS.every(f=>!rssData[f.id]?.items?.length)
-  let normas=allNormas
-  if(area!=='all') normas=normas.filter(n=>n.area===area)
-  if(urgFilt) normas=normas.filter(n=>n.urgencia===urgFilt)
-  if(tipos.length) normas=normas.filter(n=>tipos.includes(n.tipo))
-  if(q){const ql=q.toLowerCase();normas=normas.filter(n=>n.titulo.toLowerCase().includes(ql)||n.resumo.toLowerCase().includes(ql))}
-  const urgCnt=allNormas.reduce((a,n)=>{a[n.urgencia]=(a[n.urgencia]||0)+1;return a},{} as Record<string,number>)
-  const tiposAll=[...new Set(allNormas.map(n=>n.tipo))]
-  const fmt=(d:string)=>{try{return new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'})}catch{return d}}
+  const isLoading = FEEDS.some(f => feeds[f.id]?.loading)
+  const hasErr    = !isLoading && FEEDS.every(f => !feeds[f.id]?.items?.length)
 
-  const toggleCard=(id:number)=>setCards(prev=>({...prev,[id]:{...prev[id],tab:'analise',open:!prev[id]?.open}}))
-  const setTab=(id:number,tab:string)=>setCards(prev=>({...prev,[id]:{...prev[id],open:true,tab}}))
+  let normas = [...allNormas]
+  if (area !== 'all') normas = normas.filter(n => n.area === area)
+  if (urgFilt)        normas = normas.filter(n => n.urgencia === urgFilt)
+  if (tipos.length)   normas = normas.filter(n => tipos.includes(n.tipo))
+  if (q) { const ql = q.toLowerCase(); normas = normas.filter(n => n.titulo.toLowerCase().includes(ql)||n.resumo.toLowerCase().includes(ql)) }
 
-  const gerarAnalise=async(n:Norma)=>{
-    const k=getKey(); if(!k){alert('Configure sua API key em Configurações');return}
-    setCards(prev=>({...prev,[n.id]:{...prev[n.id],open:true,tab:'analise',loading:true}}))
+  const urgCnt = allNormas.reduce((a,n) => ({...a,[n.urgencia]:(a[n.urgencia]||0)+1}), {} as Record<string,number>)
+  const tiposAll = [...new Set(allNormas.map(n=>n.tipo))]
+
+  const toggleCard = (id: number) => setCards(p => ({...p,[id]:{...p[id],tab:'analise',open:!p[id]?.open}}))
+  const setTab = (id: number, tab: 'analise'|'resumo') => setCards(p => ({...p,[id]:{...p[id],open:true,tab}}))
+
+  const analise = async (n: Norma) => {
+    const k = getKey()
+    if (!k) { alert('Configure sua API key em Configurações para usar a análise por IA.'); return }
+    setCards(p => ({...p,[n.id]:{...p[n.id],open:true,tab:'analise',loading:true}}))
     try {
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:'Você é especialista sênior em regulação financeira brasileira (BCB/CMN). Análises objetivas e práticas para IFs.',messages:[{role:'user',content:`Analise esta norma BCB em 4 tópicos (máx 90 palavras cada):\n**1. O que muda** — impacto prático e operacional\n**2. Quem é afetado** — tipos de IF, segmentos prudenciais\n**3. CADOCs impactados** — documentos BCB afetados, campos específicos, exemplo de mudança\n**4. Prazo e ação** — datas-limite e o que fazer\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})})
-      const d=await r.json()
-      setCards(prev=>({...prev,[n.id]:{...prev[n.id],loading:false,analise:d.content?.[0]?.text||'Análise não disponível'}}))
-    } catch(e:any){setCards(prev=>({...prev,[n.id]:{...prev[n.id],loading:false,analise:'Erro: '+e.message}}))}
+      const r = await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST', headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:'Especialista sênior em regulação financeira BCB/CMN. Análises objetivas e práticas para IFs brasileiras.',messages:[{role:'user',content:`Analise a norma em 4 tópicos (máx 80 palavras cada):\n**1. O que muda** — impacto operacional\n**2. Quem é afetado** — tipos de IF e segmentos\n**3. CADOCs impactados** — documentos BCB afetados e campos específicos\n**4. Prazo e ação** — datas-limite e próximos passos\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})
+      })
+      const d = await r.json()
+      setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:d.content?.[0]?.text||'Sem resposta'}}))
+    } catch(e:any) { setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:'Erro: '+e.message}})) }
   }
 
-  const sendChat=async()=>{
-    const k=getKey(); if(!chatInput.trim()||chatBusy)return; if(!k){alert('Configure API key');return}
-    const msg=chatInput.trim(); setChatInput(''); setChatMsgs(prev=>[...prev,{role:'user',content:msg}]); setChatBusy(true)
+  const send = async () => {
+    const k = getKey()
+    if (!inp.trim()||busy) return
+    if (!k) { alert('Configure sua API key em Configurações para usar o assistente.'); return }
+    const m = inp.trim(); setInp(''); setMsgs(p => [...p,{r:'user',c:m}]); setBusy(true)
     try {
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:'Você é o Assistente Regulatório BACEN Monitor. Responda sobre normas BCB/CMN, CADOCs, SCR, SPB e compliance de IFs brasileiras. Cite sempre o número da norma e o CADOC impactado quando relevante.',messages:[...chatMsgs.map(m=>({role:m.role,content:m.content})),{role:'user',content:msg}]})})
-      const d=await r.json(); setChatMsgs(prev=>[...prev,{role:'assistant',content:d.content?.[0]?.text||'Sem resposta'}])
-    } catch(e:any){setChatMsgs(prev=>[...prev,{role:'assistant',content:'Erro: '+e.message}])}
-    setChatBusy(false)
-    setTimeout(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight},100)
+      const r = await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST', headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:600,system:'Assistente regulatório BACEN Monitor. Responda sobre normas BCB/CMN, CADOCs, SCR e compliance de IFs brasileiras. Cite sempre o número da norma e CADOC impactado quando relevante.',messages:[...msgs.map(m=>({role:m.r,content:m.c})),{role:'user',content:m}]})
+      })
+      const d = await r.json()
+      setMsgs(p => [...p,{r:'assistant',c:d.content?.[0]?.text||'Sem resposta'}])
+    } catch(e:any) { setMsgs(p => [...p,{r:'assistant',c:'Erro: '+e.message}]) }
+    setBusy(false)
+    setTimeout(() => { if(chatEl.current) chatEl.current.scrollTop=chatEl.current.scrollHeight }, 100)
   }
 
-  const B='#e5e7eb',BG='#f9fafb',T='#111827',T3='#6b7280'
+  const G = '#0d6e52'
 
   return (
-    <div style={{display:'flex',height:'100%',overflow:'hidden',background:'#f0f2f7',fontFamily:"'Inter',system-ui,sans-serif"}}>
-      {/* Sidebar */}
-      <div style={{width:188,flexShrink:0,background:'#fff',borderRight:`1px solid ${B}`,display:'flex',flexDirection:'column',overflow:'hidden'}}>
-        {/* Year */}
-        <div style={{padding:'12px 14px',borderBottom:`1px solid ${B}`,flexShrink:0}}>
-          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,marginBottom:6}}>ANO DO FEED</div>
-          <div style={{display:'flex',gap:4}}>
-            {[2026,2025,2024].map(a=>(
-              <button key={a} onClick={()=>{setRssAno(a);BCB_NORMA_FEEDS.forEach(f=>fetchFeed(f,a))}} style={{flex:1,padding:'4px',borderRadius:5,border:`1px solid ${rssAno===a?G:B}`,background:rssAno===a?G:'#fff',color:rssAno===a?'#fff':T3,fontSize:11,fontWeight:600,cursor:'pointer',outline:'none'}}>{a}</button>
+    <div style={{ display:'flex', height:'100%', overflow:'hidden', background:'#f1f3f7', fontFamily:"'Inter',system-ui,sans-serif" }}>
+
+      {/* ── Sidebar esquerda ─────────────────────────────────────── */}
+      <div style={{ width:192, flexShrink:0, background:'#fff', borderRight:'1px solid #e5e7eb', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+
+        {/* Ano */}
+        <div style={{ padding:'12px 14px', borderBottom:'1px solid #f3f4f6', flexShrink:0 }}>
+          <div style={{ fontSize:9, fontWeight:700, letterSpacing:1.5, textTransform:'uppercase', color:'#9ca3af', marginBottom:6 }}>ANO DO FEED</div>
+          <div style={{ display:'flex', gap:4 }}>
+            {[2026,2025,2024].map(a => (
+              <button key={a} onClick={() => { setAno(a); FEEDS.forEach(f => fetchFeed(f,a)) }}
+                style={{ flex:1, padding:'4px 2px', borderRadius:5, border:`1px solid ${ano===a?G:'#e5e7eb'}`, background:ano===a?G:'#fff', color:ano===a?'#fff':'#6b7280', fontSize:11, fontWeight:600, cursor:'pointer', outline:'none' }}>{a}</button>
             ))}
           </div>
         </div>
-        {/* Areas */}
-        <div style={{padding:'6px 0',borderBottom:`1px solid ${B}`,flexShrink:0}}>
-          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>ÁREA</div>
-          {AREAS.map(a=>{
-            const cnt=a.id==='all'?allNormas.length:allNormas.filter(n=>n.area===a.id).length
-            return(<div key={a.id} onClick={()=>setArea(a.id)} style={{display:'flex',alignItems:'center',gap:7,padding:'6px 14px',cursor:'pointer',color:area===a.id?G:T3,borderLeft:`2px solid ${area===a.id?G:'transparent'}`,background:area===a.id?'rgba(10,124,92,.07)':'transparent',fontSize:12,fontWeight:area===a.id?600:400}}>
-              <span style={{fontSize:11}}>{a.ico}</span><span style={{flex:1}}>{a.label}</span>
-              {cnt>0&&<span style={{fontSize:9,fontFamily:'monospace',background:area===a.id?G:BG,color:area===a.id?'#fff':T3,padding:'1px 5px',borderRadius:8}}>{cnt}</span>}
-            </div>)
+
+        {/* Área */}
+        <div style={{ padding:'6px 0', borderBottom:'1px solid #f3f4f6', flexShrink:0 }}>
+          <div style={{ fontSize:9, fontWeight:700, letterSpacing:1.5, textTransform:'uppercase', color:'#9ca3af', padding:'4px 14px 5px' }}>ÁREA</div>
+          {AREAS.map(a => {
+            const cnt = a.id==='all' ? allNormas.length : allNormas.filter(n=>n.area===a.id).length
+            return (
+              <div key={a.id} onClick={() => setArea(a.id)} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 14px', cursor:'pointer', color:area===a.id?G:'#6b7280', borderLeft:`2px solid ${area===a.id?G:'transparent'}`, background:area===a.id?'#f0fdf4':'transparent', fontSize:12.5, fontWeight:area===a.id?600:400, transition:'all .1s' }}>
+                <span style={{ fontSize:11 }}>{a.ico}</span>
+                <span style={{ flex:1 }}>{a.l}</span>
+                {cnt > 0 && <span style={{ fontSize:9, fontFamily:'monospace', background:area===a.id?G:'#f3f4f6', color:area===a.id?'#fff':'#9ca3af', padding:'1px 5px', borderRadius:8 }}>{cnt}</span>}
+              </div>
+            )
           })}
         </div>
+
         {/* Urgência */}
-        <div style={{padding:'6px 0',borderBottom:`1px solid ${B}`,flexShrink:0}}>
-          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>URGÊNCIA</div>
-          {[{id:'critica',l:'Crítica',c:'#dc2626'},{id:'alta',l:'Alta',c:'#d97706'},{id:'normal',l:'Normal',c:G}].map(u=>(
-            <div key={u.id} onClick={()=>setUrgFilt(urgFilt===u.id?'':u.id)} style={{display:'flex',alignItems:'center',gap:7,padding:'6px 14px',cursor:'pointer',color:urgFilt===u.id?u.c:T3,borderLeft:`2px solid ${urgFilt===u.id?u.c:'transparent'}`,background:urgFilt===u.id?u.c+'12':'transparent',fontSize:12}}>
-              <div style={{width:6,height:6,borderRadius:'50%',background:u.c,flexShrink:0}}/><span style={{flex:1}}>{u.l}</span>
-              {urgCnt[u.id]&&<span style={{fontSize:9,fontFamily:'monospace'}}>{urgCnt[u.id]}</span>}
+        <div style={{ padding:'6px 0', borderBottom:'1px solid #f3f4f6', flexShrink:0 }}>
+          <div style={{ fontSize:9, fontWeight:700, letterSpacing:1.5, textTransform:'uppercase', color:'#9ca3af', padding:'4px 14px 5px' }}>URGÊNCIA</div>
+          {[{id:'critica',l:'Crítica',c:'#dc2626'},{id:'alta',l:'Alta',c:'#d97706'},{id:'normal',l:'Normal',c:G}].map(u => (
+            <div key={u.id} onClick={() => setUrgF(urgFilt===u.id?'':u.id)} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 14px', cursor:'pointer', color:urgFilt===u.id?u.c:'#6b7280', borderLeft:`2px solid ${urgFilt===u.id?u.c:'transparent'}`, background:urgFilt===u.id?u.c+'14':'transparent', fontSize:12.5, transition:'all .1s' }}>
+              <div style={{ width:6, height:6, borderRadius:'50%', background:u.c, flexShrink:0 }}/>
+              <span style={{ flex:1 }}>{u.l}</span>
+              {urgCnt[u.id] && <span style={{ fontSize:9, fontFamily:'monospace' }}>{urgCnt[u.id]}</span>}
             </div>
           ))}
         </div>
-        {/* Chat */}
-        <div style={{padding:'6px 0',flex:1}}>
-          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>FERRAMENTAS</div>
-          <div onClick={()=>setChatOpen(!chatOpen)} style={{display:'flex',alignItems:'center',gap:7,padding:'7px 14px',cursor:'pointer',color:chatOpen?G:T3,borderLeft:`2px solid ${chatOpen?G:'transparent'}`,background:chatOpen?'rgba(10,124,92,.07)':'transparent',fontSize:12}}>
-            <span>🤖</span><span style={{flex:1}}>Assistente IA</span>
-            <span style={{fontSize:8,fontWeight:800,background:G,color:'#fff',padding:'1px 4px',borderRadius:2}}>IA</span>
+
+        {/* Assistente */}
+        <div style={{ padding:'6px 0', flex:1 }}>
+          <div style={{ fontSize:9, fontWeight:700, letterSpacing:1.5, textTransform:'uppercase', color:'#9ca3af', padding:'4px 14px 5px' }}>FERRAMENTAS</div>
+          <div onClick={() => setChat(!chat)} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 14px', cursor:'pointer', color:chat?G:'#6b7280', borderLeft:`2px solid ${chat?G:'transparent'}`, background:chat?'#f0fdf4':'transparent', fontSize:12.5, transition:'all .1s' }}>
+            <span>🤖</span><span style={{ flex:1 }}>Assistente IA</span>
+            <span style={{ fontSize:8, fontWeight:800, background:G, color:'#fff', padding:'1px 4px', borderRadius:2 }}>IA</span>
           </div>
         </div>
-        {/* Status */}
-        <div style={{padding:'10px 14px',borderTop:`1px solid ${B}`,flexShrink:0}}>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
-            <div style={{width:6,height:6,borderRadius:'50%',background:isLoading?'#d97706':hasError?'#dc2626':G,boxShadow:isLoading?'none':`0 0 5px ${hasError?'#dc2626':G}`}}/>
-            <span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>{isLoading?'Carregando…':hasError?'Feeds indisponíveis':`${allNormas.length} normas · ${rssAno}`}</span>
+
+        {/* Status feed */}
+        <div style={{ padding:'10px 14px', borderTop:'1px solid #f3f4f6', flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <div style={{ width:5, height:5, borderRadius:'50%', background:isLoading?'#d97706':hasErr?'#dc2626':G, flexShrink:0 }}/>
+            <span style={{ fontSize:9.5, color:'#9ca3af', fontFamily:'monospace' }}>{isLoading?'Carregando…':hasErr?'Indisponível':`${allNormas.length} normas · ${ano}`}</span>
           </div>
         </div>
       </div>
 
-      {/* Main */}
-      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minWidth:0}}>
-        {/* Toolbar */}
-        <div style={{padding:'8px 16px',background:'#fff',borderBottom:`1px solid ${B}`,display:'flex',alignItems:'center',gap:8,flexShrink:0,flexWrap:'wrap'}}>
-          <div style={{display:'flex',alignItems:'center',gap:7,background:'#fff',border:`1px solid ${B}`,borderRadius:8,padding:'6px 10px',flex:1,minWidth:200,boxShadow:'0 1px 3px rgba(0,0,0,.04)'}}>
-            <span style={{color:T3,fontSize:14}}>⌕</span>
-            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar normas, CADOCs, temas…" style={{flex:1,border:'none',outline:'none',background:'transparent',fontSize:12.5,color:T,fontFamily:'inherit'}}/>
-            {q&&<span onClick={()=>setQ('')} style={{cursor:'pointer',color:T3,fontSize:11}}>✕</span>}
+      {/* ── Feed principal ───────────────────────────────────────── */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+
+        {/* Barra de busca e filtros */}
+        <div style={{ padding:'10px 16px', background:'#fff', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', gap:8, flexShrink:0, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:7, background:'#fff', border:'1px solid #e5e7eb', borderRadius:8, padding:'7px 11px', flex:1, minWidth:180, boxShadow:'0 1px 3px rgba(0,0,0,.04)' }}>
+            <span style={{ color:'#9ca3af', fontSize:14 }}>⌕</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar normas, CADOCs, temas regulatórios…" style={{ flex:1, border:'none', outline:'none', background:'transparent', fontSize:13, color:'#111827', fontFamily:'inherit' }}/>
+            {q && <span onClick={()=>setQ('')} style={{ cursor:'pointer', color:'#9ca3af', fontSize:12 }}>✕</span>}
           </div>
-          <button onClick={fetchAll} disabled={isLoading} style={{padding:'7px 14px',borderRadius:7,border:`1px solid ${B}`,background:'#fff',cursor:isLoading?'wait':'pointer',fontSize:11,fontWeight:600,color:'#374151',outline:'none',display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
-            {isLoading?<><span style={{display:'inline-block',width:11,height:11,border:'2px solid',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite'}}/>Carregando…</>:<>↻ Atualizar Feed BCB</>}
+          <button onClick={fetchAll} disabled={isLoading} style={{ padding:'8px 14px', borderRadius:8, border:'1px solid #e5e7eb', background:'#fff', cursor:isLoading?'default':'pointer', fontSize:12, fontWeight:600, color:'#374151', outline:'none', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+            {isLoading ? <>⏳ Carregando…</> : <>↻ Atualizar Feed</>}
           </button>
-          {urgFilt&&<button onClick={()=>setUrgFilt('')} style={{fontSize:10.5,padding:'4px 10px',borderRadius:5,border:'1px solid rgba(220,38,38,.2)',background:'rgba(220,38,38,.08)',color:'#dc2626',cursor:'pointer',outline:'none'}}>✕ {urgFilt}</button>}
         </div>
-        {/* Tipo pills */}
-        <div style={{padding:'6px 16px',background:'#fff',borderBottom:`1px solid ${B}`,display:'flex',gap:5,flexWrap:'wrap',flexShrink:0}}>
-          {tiposAll.map(t=>{
-            const cfg=TIPO_CFG[t]||{color:T3,bg:BG}
-            return(<button key={t} onClick={()=>setTipos(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t])} style={{padding:'3px 9px',borderRadius:20,fontSize:10,fontWeight:500,cursor:'pointer',outline:'none',border:`1px solid ${tipos.includes(t)?cfg.color:B}`,background:tipos.includes(t)?cfg.color:'#fff',color:tipos.includes(t)?'#fff':'#374151',transition:'all .12s'}}>{t}</button>)
+
+        {/* Pills de tipo */}
+        <div style={{ padding:'7px 16px', background:'#fff', borderBottom:'1px solid #e5e7eb', display:'flex', gap:5, flexWrap:'wrap', flexShrink:0 }}>
+          {tiposAll.map(t => {
+            const cor = TIPO_COR[t]||'#6b7280'
+            return (
+              <button key={t} onClick={() => setTipos(p => p.includes(t)?p.filter(x=>x!==t):[...p,t])} style={{ padding:'3px 10px', borderRadius:20, fontSize:10, fontWeight:500, cursor:'pointer', outline:'none', border:`1px solid ${tipos.includes(t)?cor:'#e5e7eb'}`, background:tipos.includes(t)?cor:'#fff', color:tipos.includes(t)?'#fff':'#374151', transition:'all .12s' }}>{t}</button>
+            )
           })}
-          {tipos.length>0&&<button onClick={()=>setTipos([])} style={{padding:'3px 9px',borderRadius:20,fontSize:10,fontWeight:700,border:'1px solid #dc2626',cursor:'pointer',background:'#dc2626',color:'#fff',outline:'none'}}>✕ Limpar</button>}
+          {tipos.length > 0 && <button onClick={()=>setTipos([])} style={{ padding:'3px 10px', borderRadius:20, fontSize:10, fontWeight:700, border:'1px solid #dc2626', cursor:'pointer', background:'#dc2626', color:'#fff', outline:'none' }}>✕ Limpar</button>}
         </div>
 
         {/* Feed */}
-        <div style={{flex:1,overflowY:'auto',padding:'14px 16px'}}>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
+        <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:14, flexWrap:'wrap', gap:8 }}>
             <div>
-              <h1 style={{fontSize:17,fontWeight:800,color:T,margin:'0 0 2px',letterSpacing:'-.4px'}}>{area==='all'?'Normas BCB/CMN Vigentes':AREAS.find(a=>a.id===area)?.label}</h1>
-              <span style={{fontSize:11,color:T3,fontFamily:'monospace'}}>{isLoading?'Buscando feeds ao vivo em bcb.gov.br…':`${normas.length} normas · feed ao vivo bcb.gov.br · ${rssAno}`}</span>
+              <h1 style={{ fontSize:17, fontWeight:800, color:'#111827', margin:'0 0 3px', letterSpacing:'-.4px' }}>
+                {area==='all' ? 'Normas BCB/CMN Vigentes' : AREAS.find(a=>a.id===area)?.l}
+              </h1>
+              <span style={{ fontSize:11, color:'#9ca3af', fontFamily:'monospace' }}>
+                {isLoading ? 'Buscando feeds ao vivo em bcb.gov.br…' : `${normas.length} normas · feed ao vivo · ${ano}`}
+              </span>
             </div>
           </div>
 
-          {isLoading&&!allNormas.length&&(
-            <div style={{padding:'48px',textAlign:'center',color:T3}}>
-              <div style={{width:32,height:32,border:`3px solid ${G}`,borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite',margin:'0 auto 12px'}}/>
-              <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Carregando normas do BCB…</div>
-              <div style={{fontSize:11,fontFamily:'monospace'}}>bcb.gov.br/api/feed/app/normativos · {rssAno}</div>
+          {/* Loading */}
+          {isLoading && !allNormas.length && (
+            <div style={{ padding:'60px', textAlign:'center', color:'#9ca3af' }}>
+              <div style={{ width:32, height:32, border:`3px solid ${G}`, borderTopColor:'transparent', borderRadius:'50%', animation:'spin .7s linear infinite', margin:'0 auto 12px' }}/>
+              <div style={{ fontSize:13, fontWeight:600, marginBottom:4 }}>Buscando normas do BCB…</div>
+              <div style={{ fontSize:11, fontFamily:'monospace' }}>bcb.gov.br/api/feed/app/normativos · {ano}</div>
             </div>
           )}
 
-          {!isLoading&&hasError&&(
-            <div style={{padding:'32px',textAlign:'center',background:'#fff',borderRadius:12,border:`1px solid ${B}`}}>
-              <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
-              <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>Feeds BCB indisponíveis</div>
-              <div style={{fontSize:11,color:T3,marginBottom:14,lineHeight:1.6,maxWidth:400,margin:'0 auto 14px'}}>Pode ser bloqueio CORS do sandbox. <strong>Abra o BACEN Monitor Original localmente</strong> para feeds ao vivo.<br/>O BCB serve com CORS aberto — funciona normalmente fora do sandbox.</div>
-              <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
-                <button onClick={fetchAll} style={{padding:'8px 18px',borderRadius:8,border:'none',background:G,color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',outline:'none'}}>↻ Tentar novamente</button>
-                <a href="/dashboard/cadocs" style={{padding:'8px 18px',borderRadius:8,border:`1px solid ${B}`,background:'#fff',color:'#374151',fontSize:12,fontWeight:600,textDecoration:'none'}}>📋 Ir para CADOC Original</a>
+          {/* Erro */}
+          {!isLoading && hasErr && (
+            <div style={{ background:'#fff', borderRadius:12, border:'1px solid #e5e7eb', padding:'32px', textAlign:'center' }}>
+              <div style={{ fontSize:32, marginBottom:10 }}>⚠️</div>
+              <div style={{ fontSize:14, fontWeight:700, marginBottom:6 }}>Feed BCB indisponível</div>
+              <div style={{ fontSize:12, color:'#6b7280', lineHeight:1.7, marginBottom:16, maxWidth:380, margin:'0 auto 16px' }}>
+                As requisições ao BCB podem estar bloqueadas pelo sandbox.<br/>
+                Abra o HTML original localmente para acesso direto ao RSS.<br/>
+                O BCB serve com CORS aberto — funciona fora do sandbox.
               </div>
+              <button onClick={fetchAll} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:G, color:'#fff', fontSize:12.5, fontWeight:700, cursor:'pointer' }}>↻ Tentar novamente</button>
             </div>
           )}
 
-          {!isLoading&&!hasError&&normas.length===0&&(
-            <div style={{padding:'48px',textAlign:'center',color:T3}}>
-              <div style={{fontSize:28,marginBottom:8}}>📄</div>
-              <div style={{fontSize:13,fontWeight:600}}>Nenhuma norma encontrada</div>
-              <div style={{fontSize:11,marginTop:4}}>Ajuste os filtros ou aguarde o carregamento.</div>
+          {/* Vazio */}
+          {!isLoading && !hasErr && normas.length === 0 && (
+            <div style={{ padding:'60px', textAlign:'center', color:'#9ca3af' }}>
+              <div style={{ fontSize:28, marginBottom:8 }}>📄</div>
+              <div style={{ fontSize:13, fontWeight:600 }}>Nenhuma norma encontrada</div>
+              <div style={{ fontSize:12, marginTop:4 }}>Ajuste os filtros ou aguarde o carregamento.</div>
             </div>
           )}
 
-          {normas.map(n=>{
-            const cs=cards[n.id]||{open:false,tab:'analise'}
-            const cfg=TIPO_CFG[n.tipo]||{color:T3,bg:BG}
-            const urgC=n.urgencia==='critica'?'#dc2626':n.urgencia==='alta'?'#d97706':G
-            const urgBg=n.urgencia==='critica'?'rgba(220,38,38,.08)':n.urgencia==='alta'?'rgba(217,119,6,.08)':'rgba(10,124,92,.06)'
-            const urgBrd=n.urgencia==='critica'?'rgba(220,38,38,.2)':n.urgencia==='alta'?'rgba(217,119,6,.2)':'rgba(10,124,92,.2)'
-            return(
-              <div key={n.id} style={{background:'#fff',border:`1px solid ${B}`,borderRadius:10,marginBottom:6,boxShadow:cs.open?'0 4px 16px rgba(0,0,0,.08)':'0 1px 3px rgba(0,0,0,.04)',overflow:'hidden',position:'relative',borderLeft:`3px solid ${cs.open?cfg.color:'transparent'}`,transition:'border-color .15s'}}>
-                <div onClick={()=>toggleCard(n.id)} style={{padding:'11px 14px',cursor:'pointer',userSelect:'none'}}>
-                  <div style={{fontSize:13,fontWeight:600,color:T,lineHeight:1.5,marginBottom:6}}>{n.titulo}</div>
-                  <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
-                    <span style={{padding:'2px 7px',borderRadius:4,fontSize:9,fontWeight:700,letterSpacing:'.3px',border:`1px solid ${cfg.color}40`,background:cfg.bg,color:cfg.color}}>{n.tipo}</span>
-                    {n.data_pub&&<span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>📅 {fmt(n.data_pub)}</span>}
-                    {n.numero&&<span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>#{n.numero}</span>}
-                    <span style={{fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:3,border:`1px solid ${urgBrd}`,background:urgBg,color:urgC,fontFamily:'monospace'}}>{n.urgencia==='critica'?'⚠ CRÍTICA':n.urgencia==='alta'?'↑ ALTA':'● NORMAL'}</span>
-                    <span style={{marginLeft:'auto',fontSize:11,color:T3}}>{cs.open?'▲':'▼'}</span>
+          {/* Cards de normas */}
+          {normas.map(n => {
+            const cs = cards[n.id] || { open:false, tab:'analise' as const }
+            const cor = TIPO_COR[n.tipo] || '#6b7280'
+            const urgCor = n.urgencia==='critica'?'#dc2626':n.urgencia==='alta'?'#d97706':G
+            return (
+              <div key={n.id} style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, marginBottom:8, overflow:'hidden', boxShadow:cs.open?'0 4px 16px rgba(0,0,0,.08)':'0 1px 3px rgba(0,0,0,.04)', borderLeft:`3px solid ${cs.open?cor:'transparent'}`, transition:'border-color .15s' }}>
+
+                {/* Cabeçalho do card */}
+                <div onClick={() => toggleCard(n.id)} style={{ padding:'12px 16px', cursor:'pointer', userSelect:'none' }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#111827', lineHeight:1.5, marginBottom:7 }}>{n.titulo}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                    <span style={{ padding:'2px 8px', borderRadius:4, fontSize:9.5, fontWeight:700, background:cor+'15', color:cor, border:`1px solid ${cor}35` }}>{n.tipo}</span>
+                    {n.data_pub && <span style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>📅 {fmtData(n.data_pub)}</span>}
+                    {n.numero && <span style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>#{n.numero}</span>}
+                    <span style={{ fontSize:9.5, fontWeight:700, padding:'2px 8px', borderRadius:4, color:urgCor, background:urgCor+'12', border:`1px solid ${urgCor}30`, fontFamily:'monospace' }}>
+                      {n.urgencia==='critica'?'⚠ CRÍTICA':n.urgencia==='alta'?'↑ ALTA':'● NORMAL'}
+                    </span>
+                    <span style={{ marginLeft:'auto', fontSize:12, color:'#d1d5db' }}>{cs.open ? '▲' : '▼'}</span>
                   </div>
                 </div>
 
-                {cs.open&&(
-                  <div style={{borderTop:`1px solid ${B}`}}>
-                    <div style={{display:'flex',background:'#f3f4f6',borderBottom:`1px solid ${B}`}}>
-                      {([['analise','🤖 Análise IA'],['resumo','📄 Resumo']] as [string,string][]).map(([t,l])=>(
-                        <div key={t} onClick={()=>setTab(n.id,t)} style={{flex:1,padding:'8px 4px',textAlign:'center',fontSize:10,fontWeight:600,color:cs.tab===t?G:T3,cursor:'pointer',borderBottom:cs.tab===t?`2px solid ${G}`:'2px solid transparent',marginBottom:-1,letterSpacing:'.4px',textTransform:'uppercase',userSelect:'none'}}>{l}</div>
+                {/* Conteúdo expandido */}
+                {cs.open && (
+                  <div style={{ borderTop:'1px solid #f3f4f6' }}>
+                    <div style={{ display:'flex', background:'#f9fafb', borderBottom:'1px solid #f3f4f6' }}>
+                      {([['analise','🤖 Análise IA'],['resumo','📄 Resumo']] as [string,string][]).map(([t,l]) => (
+                        <div key={t} onClick={() => setTab(n.id, t as any)} style={{ flex:1, padding:'9px 4px', textAlign:'center', fontSize:10.5, fontWeight:600, color:cs.tab===t?G:'#9ca3af', cursor:'pointer', borderBottom:cs.tab===t?`2px solid ${G}`:'2px solid transparent', marginBottom:-1, letterSpacing:'.4px', textTransform:'uppercase', userSelect:'none' }}>{l}</div>
                       ))}
                     </div>
-                    <div style={{padding:'12px 14px'}}>
-                      {cs.tab==='analise'&&(
+                    <div style={{ padding:'14px 16px' }}>
+
+                      {cs.tab === 'analise' && (
                         <div>
-                          <div style={{background:'#f9fafb',border:`1px solid ${B}`,borderRadius:8,padding:10,marginBottom:8}}>
-                            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
-                              <span style={{fontSize:8.5,letterSpacing:1,textTransform:'uppercase',fontFamily:'monospace',fontWeight:700,color:G,background:'rgba(10,124,92,.08)',padding:'2px 7px',borderRadius:3,border:'1px solid rgba(10,124,92,.2)'}}>Análise IA</span>
-                              <span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>Claude Sonnet 4.6</span>
-                              <a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:9.5,color:'#1d5fcc',fontFamily:'monospace',padding:'2px 8px',border:'1px solid rgba(29,95,204,.3)',borderRadius:4,background:'rgba(29,95,204,.06)',textDecoration:'none'}}>↗ Norma BCB</a>
+                          <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:8, padding:12, marginBottom:10 }}>
+                            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10, flexWrap:'wrap' }}>
+                              <span style={{ fontSize:9, letterSpacing:1, textTransform:'uppercase', fontFamily:'monospace', fontWeight:700, color:G, background:'#f0fdf4', padding:'2px 7px', borderRadius:3, border:'1px solid #bbf7d0' }}>Análise IA</span>
+                              <span style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>Claude Sonnet 4.6</span>
+                              {n.url && <a href={n.url} target="_blank" rel="noreferrer" style={{ marginLeft:'auto', fontSize:10.5, color:'#1d5fcc', textDecoration:'none', padding:'2px 8px', border:'1px solid #bfdbfe', borderRadius:4, background:'#eff6ff' }}>↗ Norma oficial BCB</a>}
                             </div>
-                            {cs.loading?(
-                              <div style={{display:'flex',gap:5,alignItems:'center',padding:'8px 0'}}>
-                                {[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:G,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}
-                                <span style={{fontSize:10,color:T3,marginLeft:4}}>Analisando norma…</span>
+                            {cs.loading ? (
+                              <div style={{ display:'flex', gap:5, alignItems:'center', padding:'8px 0' }}>
+                                {[0,1,2].map(i => <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:G, animation:`ald 1.2s ${i*.22}s infinite` }}/>)}
+                                <span style={{ fontSize:11, color:'#9ca3af', marginLeft:6 }}>Analisando norma com IA…</span>
                               </div>
-                            ):cs.analise?(
-                              <div style={{fontSize:12,color:T,lineHeight:1.8,whiteSpace:'pre-wrap'}} dangerouslySetInnerHTML={{__html:(cs.analise||'').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/>
-                            ):(
-                              <div style={{fontSize:11,color:T3}}>Clique em "Gerar Análise" para análise contextualizada desta norma com Claude.</div>
+                            ) : cs.analise ? (
+                              <div style={{ fontSize:12.5, color:'#111827', lineHeight:1.85, whiteSpace:'pre-wrap' }} dangerouslySetInnerHTML={{ __html: cs.analise.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>') }}/>
+                            ) : (
+                              <div style={{ fontSize:12, color:'#9ca3af' }}>Clique em "Gerar Análise" para uma análise contextualizada com IA.</div>
                             )}
                           </div>
-                          {!cs.loading&&!cs.analise&&<button onClick={()=>gerarAnalise(n)} style={{padding:'7px 14px',background:G,color:'#fff',border:'none',borderRadius:7,fontWeight:700,fontSize:12,cursor:'pointer',outline:'none'}}>✦ Gerar Análise IA</button>}
-                          {cs.analise&&!cs.loading&&<button onClick={()=>{setCards(prev=>({...prev,[n.id]:{...prev[n.id],analise:undefined}}));gerarAnalise(n)}} style={{padding:'5px 10px',background:'none',color:G,border:'1px solid rgba(10,124,92,.2)',borderRadius:5,fontSize:10,cursor:'pointer',outline:'none'}}>↻ Regenerar</button>}
+                          {!cs.loading && !cs.analise && <button onClick={()=>analise(n)} style={{ padding:'8px 16px', background:G, color:'#fff', border:'none', borderRadius:8, fontWeight:700, fontSize:12.5, cursor:'pointer', outline:'none' }}>✦ Gerar Análise IA</button>}
+                          {!cs.loading && cs.analise && <button onClick={()=>{setCards(p=>({...p,[n.id]:{...p[n.id],analise:undefined}}));analise(n)}} style={{ padding:'6px 12px', background:'none', color:G, border:`1px solid #bbf7d0`, borderRadius:6, fontSize:11, cursor:'pointer', outline:'none' }}>↻ Regenerar</button>}
                         </div>
                       )}
-                      {cs.tab==='resumo'&&(
+
+                      {cs.tab === 'resumo' && (
                         <div>
-                          {n.resumo?<p style={{fontSize:12,color:T,lineHeight:1.75,marginBottom:10}}>{n.resumo}</p>:<p style={{fontSize:11,color:T3}}>Resumo não disponível neste feed.</p>}
-                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',paddingTop:8,borderTop:`1px solid ${B}`}}>
-                            {n.data_pub&&<span style={{fontSize:9.5,fontFamily:'monospace',color:G,background:'rgba(10,124,92,.08)',border:'1px solid rgba(10,124,92,.2)',padding:'1px 6px',borderRadius:3}}>✓ {fmt(n.data_pub)}</span>}
-                            <span style={{fontSize:10,padding:'2px 8px',borderRadius:4,background:'#f3f4f6',color:'#374151'}}>{n.tipo}</span>
-                            {n.url&&<a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:10,color:'#1d5fcc',textDecoration:'none'}}>↗ Referência BCB</a>}
+                          {n.resumo ? <p style={{ fontSize:12.5, color:'#374151', lineHeight:1.75, marginBottom:12 }}>{n.resumo}</p> : <p style={{ fontSize:12, color:'#9ca3af' }}>Resumo não disponível neste feed.</p>}
+                          <div style={{ display:'flex', alignItems:'center', gap:7, paddingTop:10, borderTop:'1px solid #f3f4f6', flexWrap:'wrap' }}>
+                            {n.data_pub && <span style={{ fontSize:10, fontFamily:'monospace', color:G, background:'#f0fdf4', border:'1px solid #bbf7d0', padding:'2px 7px', borderRadius:4 }}>✓ {fmtData(n.data_pub)}</span>}
+                            <span style={{ fontSize:10, padding:'2px 8px', borderRadius:4, background:'#f3f4f6', color:'#6b7280' }}>{n.tipo}</span>
+                            {n.url && <a href={n.url} target="_blank" rel="noreferrer" style={{ marginLeft:'auto', fontSize:11, color:'#1d5fcc', textDecoration:'none' }}>↗ Ver no BCB</a>}
                           </div>
                         </div>
                       )}
+
                     </div>
                   </div>
                 )}
@@ -347,31 +380,40 @@ export default function NormasPage() {
         </div>
       </div>
 
-      {/* Chat */}
-      {chatOpen&&(
-        <div style={{width:275,flexShrink:0,borderLeft:`1px solid ${B}`,background:'#fff',display:'flex',flexDirection:'column',overflow:'hidden'}}>
-          <div style={{padding:'11px 14px',borderBottom:`1px solid ${B}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
-            <span style={{fontSize:12,fontWeight:700,color:T}}>🤖 Assistente Regulatório</span>
-            <button onClick={()=>setChatOpen(false)} style={{background:'none',border:'none',cursor:'pointer',color:T3,fontSize:14,outline:'none'}}>✕</button>
+      {/* ── Chat lateral ────────────────────────────────────────── */}
+      {chat && (
+        <div style={{ width:288, flexShrink:0, borderLeft:'1px solid #e5e7eb', background:'#fff', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <div style={{ padding:'12px 16px', borderBottom:'1px solid #f3f4f6', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:'#111827' }}>🤖 Assistente Regulatório</div>
+              <div style={{ fontSize:10, color:'#9ca3af', marginTop:1 }}>Claude Sonnet 4.6 · BCB/CMN</div>
+            </div>
+            <button onClick={() => setChat(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#9ca3af', fontSize:16, outline:'none' }}>✕</button>
           </div>
-          {chatMsgs.length===0&&<div style={{padding:'10px 12px',flexShrink:0}}>
-            <div style={{fontSize:10,color:T3,marginBottom:6}}>Sugestões:</div>
-            {SUGESTOES.map(s=><div key={s} onClick={()=>setChatInput(s)} style={{padding:'5px 9px',fontSize:10,color:'#374151',background:'#f3f4f6',border:`1px solid ${B}`,borderRadius:6,marginBottom:4,cursor:'pointer',lineHeight:1.4}}>{s}</div>)}
-          </div>}
-          <div ref={chatRef} style={{flex:1,overflowY:'auto',padding:'10px 12px'}}>
-            {chatMsgs.map((m,i)=>(
-              <div key={i} style={{marginBottom:10,display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
-                <div style={{maxWidth:'88%',padding:'8px 11px',borderRadius:m.role==='user'?'10px 10px 2px 10px':'10px 10px 10px 2px',background:m.role==='user'?G:'#f0f2f5',color:m.role==='user'?'#fff':T,fontSize:11,lineHeight:1.6}} dangerouslySetInnerHTML={{__html:m.content.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/>
+          {msgs.length === 0 && (
+            <div style={{ padding:'12px 14px', flexShrink:0 }}>
+              <div style={{ fontSize:10, color:'#9ca3af', marginBottom:8 }}>Perguntas sugeridas:</div>
+              {['Quais CADOCs são obrigatórios para credenciadores?','O que muda com a Res. 522 para subcredenciadores?','CADOC 3044 substitui o 3040?','Capital mínimo para SCD com conta Pix?'].map(s => (
+                <div key={s} onClick={() => setInp(s)} style={{ padding:'6px 10px', fontSize:11, color:'#374151', background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:7, marginBottom:5, cursor:'pointer', lineHeight:1.5 }}>{s}</div>
+              ))}
+            </div>
+          )}
+          <div ref={chatEl} style={{ flex:1, overflowY:'auto', padding:'12px 14px' }}>
+            {msgs.map((m,i) => (
+              <div key={i} style={{ marginBottom:10, display:'flex', justifyContent:m.r==='user'?'flex-end':'flex-start' }}>
+                <div style={{ maxWidth:'87%', padding:'9px 12px', borderRadius:m.r==='user'?'12px 12px 3px 12px':'12px 12px 12px 3px', background:m.r==='user'?G:'#f3f4f6', color:m.r==='user'?'#fff':'#111827', fontSize:12, lineHeight:1.65 }}
+                  dangerouslySetInnerHTML={{ __html: m.c.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>') }}/>
               </div>
             ))}
-            {chatBusy&&<div style={{display:'flex',gap:4,padding:'4px 0'}}>{[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:G,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}</div>}
+            {busy && <div style={{ display:'flex', gap:4, padding:'6px 0' }}>{[0,1,2].map(i => <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:G, animation:`ald 1.2s ${i*.2}s infinite` }}/>)}</div>}
           </div>
-          <div style={{padding:'10px 12px',borderTop:`1px solid ${B}`,display:'flex',gap:6,flexShrink:0}}>
-            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendChat()} placeholder="Pergunte sobre normas BCB…" style={{flex:1,padding:'7px 10px',border:`1px solid ${B}`,borderRadius:7,fontSize:11,outline:'none',fontFamily:'inherit'}}/>
-            <button onClick={sendChat} disabled={chatBusy||!chatInput.trim()} style={{padding:'7px 12px',background:G,color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:11,fontWeight:700,outline:'none'}}>→</button>
+          <div style={{ padding:'10px 14px', borderTop:'1px solid #f3f4f6', display:'flex', gap:7, flexShrink:0 }}>
+            <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Pergunte sobre normas BCB…" style={{ flex:1, padding:'8px 11px', border:'1px solid #e5e7eb', borderRadius:8, fontSize:12, outline:'none', fontFamily:'inherit' }}/>
+            <button onClick={send} disabled={busy||!inp.trim()} style={{ padding:'8px 13px', background:G, color:'#fff', border:'none', borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, outline:'none', opacity:busy||!inp.trim()?.5:1 }}>→</button>
           </div>
         </div>
       )}
+
       <style>{`@keyframes ald{0%,100%{opacity:.2;transform:scale(.7)}50%{opacity:1;transform:scale(1.2)}} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
