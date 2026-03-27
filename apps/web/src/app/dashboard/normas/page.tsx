@@ -1,318 +1,340 @@
 'use client'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 
-const C = {
-  grn:'#0a7c5c',grnb:'rgba(10,124,92,.08)',grnbrd:'rgba(10,124,92,.2)',
-  txt:'#0d1117',txt2:'#1e3a5f',txt3:'#5a6e8a',
-  bg:'#f5f6f8',bg2:'#fff',bg3:'#eef0f3',brd:'#dde1e9',brd2:'#c8cdd8',
-  blu:'#1d5fcc',blub:'rgba(29,95,204,.08)',blubrd:'rgba(29,95,204,.18)',
-  amb:'#b45309',ambb:'rgba(180,83,9,.08)',ambbrd:'rgba(180,83,9,.2)',
-  red:'#c0392b',redb:'rgba(192,57,43,.06)',redbrd:'rgba(192,57,43,.18)',
-  pnk:'#7c3aed',pnkb:'rgba(124,58,237,.06)',pnkbrd:'rgba(124,58,237,.18)',
-  cyn:'#0e7490',cynb:'rgba(14,116,144,.06)',cynbrd:'rgba(14,116,144,.18)',
+interface RssItem { titulo:string; link:string; descricao:string; data:string; guid:string }
+interface Norma { id:number; _rawId:string; tipo:string; numero:string; titulo:string; resumo:string; data_pub:string; area:string; urgencia:string; url:string; tags:string[]; _feedId:string }
+interface CardState { open:boolean; tab:string; analise?:string; loading?:boolean }
+
+const BCB_BASE = 'https://www.bcb.gov.br/api/feed/app'
+const BCB_NORMA_FEEDS = [
+  { id:'normativos',       url:BCB_BASE+'/normativos/normativos',       supAno:true },
+  { id:'demaisnormativos', url:BCB_BASE+'/normativos/demaisnormativos', supAno:true },
+  { id:'cartascirculares', url:BCB_BASE+'/normativos/cartascirculares', supAno:true },
+]
+const AREAS = [
+  {id:'all',label:'Todas Vigentes',ico:'◈'},
+  {id:'pagamentos',label:'Pagamentos',ico:'💳'},
+  {id:'crédito',label:'Crédito / SCR',ico:'📊'},
+  {id:'tecnologia',label:'Tecnologia',ico:'⚡'},
+  {id:'câmbio',label:'Câmbio / PSAV',ico:'🔄'},
+  {id:'capital',label:'Capital',ico:'🏛'},
+]
+const TIPO_CFG: Record<string,{color:string,bg:string}> = {
+  'Resolução BCB':{color:'#0a7c5c',bg:'rgba(10,124,92,.10)'},
+  'Instrução Normativa BCB':{color:'#1d5fcc',bg:'rgba(29,95,204,.10)'},
+  'Resolução CMN':{color:'#c0392b',bg:'rgba(192,57,43,.10)'},
+  'Resolução Conjunta':{color:'#7c3aed',bg:'rgba(124,58,237,.10)'},
+  'Circular BCB':{color:'#b45309',bg:'rgba(180,83,9,.10)'},
+  'Carta Circular BCB':{color:'#b45309',bg:'rgba(180,83,9,.10)'},
+  'Comunicado BCB':{color:'#b45309',bg:'rgba(180,83,9,.08)'},
 }
-
-// CADOC impact database — which CADOCs and fields each norm impacts
-const CADOC_IMPACT: Record<number,{cadoc:string,campo:string,tipo:string,descImpacto:string,exemploAntes:string,exemploDepois:string}[]> = {
-  11:[
-    {cadoc:'7011',campo:'products[].type',tipo:'Expansão de domínio',descImpacto:'Open Finance Fase 4 — Open Finance Res. 1 estabelece base para expansão. CADOC 7011 deve incluir todos os produtos financeiros das fases anteriores.',exemploAntes:'"type":"CONTA_CORRENTE"',exemploDepois:'"type":"CONTA_CORRENTE" // também: INVESTIMENTO, PREVIDENCIA, CAMBIO (Fase 4)'},
-  ],
-  12:[
-    {cadoc:'2300',campo:'captacoes[].tipoInstrumento',tipo:'CADOC específico',descImpacto:'Res. 264/2022: IFs com captações no exterior devem enviar CADOC 2300 com tipo de instrumento, prazo e montante.',exemploAntes:'// sem CADOC 2300',exemploDepois:'{"cnpj":"12345678","dataBase":"202603","captacoes":[{"tipoInstrumento":"BOND","prazo":360,"valorUSD":50000000}]}'},
-  ],
-  1:[
-    {cadoc:'3044',campo:'operacoes[].cessoes[].valor',tipo:'Novo campo',descImpacto:'Fase 2 obriga reporte de cessões com valor e data no CADOC 3044',exemploAntes:'// cessões não reportadas',exemploDepois:'"cessoes":[{"acao":1,"data":"2026-05-01","valor":150000.00}]'},
-    {cadoc:'3044',campo:'operacoes[].aquisicoes[]',tipo:'Novo array',descImpacto:'Aquisições de carteiras passam a ser obrigatórias em acao=1',exemploAntes:'// aquisicoes ausente',exemploDepois:'"aquisicoes":[{"acao":1,"data":"2026-05-01","valor":200000.00}]'},
-  ],
-  2:[
-    {cadoc:'3040',campo:'Op.Mod',tipo:'Domínio expandido',descImpacto:'Novas modalidades de crédito imobiliário FGTS adicionadas ao domínio Mod',exemploAntes:'"Mod":"0201"',exemploDepois:'"Mod":"0221" // nova modalidade FGTS'},
-    {cadoc:'3040',campo:'Op.ContInstFinRes4966.ClasAtFin',tipo:'Regra semântica',descImpacto:'Operações FGTS devem ter ClasAtFin preenchido com classificação específica',exemploAntes:'"ClasAtFin":"1"',exemploDepois:'"ClasAtFin":"3" // FGTS: instrumentos de dívida'},
-  ],
-  3:[
-    {cadoc:'4010',campo:'conta 3.X.X.XX.XX-X (ativo virtual)',tipo:'Novo grupo contábil',descImpacto:'PSAVs devem segregar ativos virtuais em contas COSIF específicas',exemploAntes:'// sem conta para cripto',exemploDepois:'{"codigoConta":"3.9.9.00.00-0","saldo":500000}'},
-    {cadoc:'C212',campo:'posicoes[].tipoAtivo',tipo:'Novo CADOC',descImpacto:'Novo documento C212 para reporte mensal de posições em ativos virtuais',exemploAntes:'// CADOC C212 inexistente',exemploDepois:'{"ispb":"17887874","dataBase":"202603","posicoes":[{"tipoAtivo":"BTC","vlrPosicao":1500000}]}'},
-  ],
-  4:[
-    {cadoc:'7011',campo:'products[].type',tipo:'Domínio expandido',descImpacto:'Open Finance Fase 4 adiciona produtos de investimento e previdência',exemploAntes:'"type":"CONTA_CORRENTE"',exemploDepois:'"type":"INVESTIMENTO_RENDA_VARIAVEL" // novo em Fase 4'},
-  ],
-  5:[
-    {cadoc:'6334',campo:'CONCCRED (novo arquivo obrigatório)',tipo:'Novo arquivo TXT',descImpacto:'Subcredenciadores passam a enviar arquivo CONCCRED com seus estabelecimentos',exemploAntes:'// subcredenciadores não enviavam 6334',exemploDepois:'CONCCRED20260301178878780000000001\n20261C99000000100000000800000004250000000000014'},
-    {cadoc:'2050',campo:'tipoParticipante',tipo:'Novo valor de domínio',descImpacto:'Subcredenciador passa a ser participante direto — novo valor em tipoParticipante',exemploAntes:'"tipoParticipante":"CREDENCIADOR"',exemploDepois:'"tipoParticipante":"SUBCREDENCIADOR" // novo valor Res. 522'},
-  ],
-  7:[
-    {cadoc:'6334',campo:'CONCCRED.bandeira',tipo:'Domínio expandido',descImpacto:'Pix parcelado cria nova bandeira (código 10) no domínio de bandeiras',exemploAntes:'"bandeira":"99" // outros',exemploDepois:'"bandeira":"10" // Pix Parcelado — novo código'},
-    {cadoc:'2055',campo:'modalidadePagamento',tipo:'Novo valor',descImpacto:'Pix Garantido adiciona nova modalidade no CADOC 2055',exemploAntes:'"modalidadePagamento":"PIX"',exemploDepois:'"modalidadePagamento":"PIX_GARANTIDO" // novo'},
-  ],
-  8:[
-    {cadoc:'3040',campo:'Op.ContInstFinRes4966',tipo:'Campo obrigatório expandido',descImpacto:'Res. 4.966: VlrContBr e VlrPerdaAcum passam a ser obrigatórios para todas as IFs — não apenas opcional',exemploAntes:'"ContInstFinRes4966":{"ClasAtFin":"1","CartProvMin":"A"}',exemploDepois:'"ContInstFinRes4966":{"ClasAtFin":"1","CartProvMin":"A","VlrContBr":50000.00,"VlrPerdaAcum":250.00}'},
-    {cadoc:'3040',campo:'Op.ClassOp',tipo:'Regra de negócio alterada',descImpacto:'Metodologia ECL altera mapeamento ClassOp × ProvConsttd — percentuais mínimos revisados',exemploAntes:'"ClassOp":"B","ProvConsttd":100 // 1% mínimo antigo',exemploDepois:'"ClassOp":"B","ProvConsttd":150 // 3% conforme Res. 4.966'},
-  ],
-  9:[
-    {cadoc:'4010',campo:'conta C212 (ativo virtual)',tipo:'Novo reporte',descImpacto:'Res. 519: PSAVs devem registrar posições em ativos virtuais separadamente',exemploAntes:'// sem segregação cripto',exemploDepois:'{"codigoConta":"C212.001","saldo":750000}'},
-  ],
-  10:[
-    {cadoc:'6334',campo:'Todos os 10 arquivos TXT',tipo:'Novo CADOC',descImpacto:'Res. 150 criou o CADOC 6334 (ASPB034) — 10 arquivos posicionais ISO-8859-1 trimestrais',exemploAntes:'// CADOC 6334 não existia',exemploDepois:'DATABASE20260301178878780202603  \nCONCCRED202603011788787800000001\n20261C99000000100...'},
-  ],
-}
-
-const NORMAS = [
-  {id:1,titulo:'Resolução BCB nº 403/2025 — CADOC 3044 Fase 2: Cessões e Aquisições de Carteiras',tipo:'Resolução BCB',area:'crédito',urgencia:'critica',data_pub:'2025-11-10',numero:'403',resumo:'Segunda fase do CADOC 3044: obrigatoriedade do reporte de cessões de crédito e aquisições de carteiras. Novos arrays cessoes[] e aquisicoes[] no JSON de envio. Vigência: maio/2026 para IFs com patrimônio > R$1bi.',url:'https://www.bcb.gov.br',vigencia:'novembro/2025',tags:['CADOC 3044','SCR','Cessões','Aquisições']},
-  {id:2,titulo:'Resolução BCB nº 411/2025 — Pix Parcelado e Pix Garantido',tipo:'Resolução BCB',area:'pagamentos',urgencia:'critica',data_pub:'2025-10-05',numero:'411',resumo:'Regulamenta o Pix Parcelado e Pix Garantido. Cria nova bandeira código 10 no CADOC 6334 (CONCCRED). Impacta CADOC 2055 com novo campo modalidadePagamento = PIX_PARCELADO e PIX_GARANTIDO. Vigência: fevereiro/2026.',url:'https://www.bcb.gov.br',vigencia:'outubro/2025',tags:['Pix','CADOC 6334','CADOC 2055','Pagamentos']},
-  {id:3,titulo:'Resolução BCB nº 396/2025 — Requisitos Prudenciais para PSAVs',tipo:'Resolução BCB',area:'câmbio',urgencia:'critica',data_pub:'2025-09-15',numero:'396',resumo:'Define capital mínimo, governança e requerimentos operacionais para PSAVs. Exige segregação de ativos virtuais em contas COSIF específicas e criação do reporte C212. Complementa a Res. BCB 519-521/2023.',url:'https://www.bcb.gov.br',vigencia:'setembro/2025',tags:['PSAV','C212','CADOC 4010','Cripto']},
-  {id:4,titulo:'Resolução BCB nº 522/2025 — Subcredenciadores: Liquidação Obrigatória no SPB',tipo:'Resolução BCB',area:'pagamentos',urgencia:'critica',data_pub:'2025-06-01',numero:'522',resumo:'Obriga subcredenciadores a participar diretamente da liquidação financeira em arranjos de pagamento. Prazo de adequação: 18 meses (até dez/2026). Subcredenciadores passam a enviar CADOC 6334 e CADOC 2050 com novo campo tipoParticipante=SUBCREDENCIADOR.',url:'https://www.bcb.gov.br',vigencia:'junho/2025',tags:['Subcredenciador','CADOC 6334','CADOC 2050','SPB']},
-  {id:5,titulo:'Instrução Normativa BCB nº 510/2025 — Open Finance Fase 4: Investimentos e Previdência',tipo:'Instrução Normativa BCB',area:'tecnologia',urgencia:'alta',data_pub:'2025-07-20',numero:'510',resumo:'Regulamenta a quarta fase do Open Finance, incluindo produtos de investimento, previdência e câmbio. IFs devem expandir o CADOC 7011 com novos tipos de produtos. Novos endpoints obrigatórios e SLAs de disponibilidade.',url:'https://www.bcb.gov.br',vigencia:'julho/2025',tags:['Open Finance','CADOC 7011','API','Dados']},
-  {id:6,titulo:'Resolução CMN nº 5.088/2024 — Crédito Imobiliário FGTS: Novas Modalidades',tipo:'Resolução CMN',area:'crédito',urgencia:'alta',data_pub:'2024-12-02',numero:'5088',resumo:'Altera regras do crédito habitacional com recursos do FGTS. Novas modalidades de financiamento adicionadas ao domínio Mod do CADOC 3040. Alteração no mapeamento ClassOp × ProvConsttd para operações FGTS.',url:'https://www.bcb.gov.br',vigencia:'dezembro/2024',tags:['CADOC 3040','SCR','Crédito Imobiliário','FGTS']},
-  {id:7,titulo:'Circular BCB nº 4.019/2025 — SCR Taxas de Juros: Atualização CADOC 3060',tipo:'Circular BCB',area:'crédito',urgencia:'normal',data_pub:'2025-04-10',numero:'4019',resumo:'Atualiza metodologia de cálculo dos percentis de taxas de juros e expande modalidades obrigatórias no CADOC 3060. Novo prazo de envio: semanal D+5. Inclusão de novas modalidades de crédito imobiliário.',url:'https://www.bcb.gov.br',vigencia:'abril/2025',tags:['CADOC 3060','SCR','Taxas','D+5']},
-  {id:8,titulo:'Resolução CMN nº 4.966/2021 — Instrumentos Financeiros e PCLD (ECL)',tipo:'Resolução CMN',area:'crédito',urgencia:'normal',data_pub:'2021-11-25',numero:'4966',resumo:'Define nova metodologia PCLD por perda esperada (ECL). Os campos VlrContBr e VlrPerdaAcum do CADOC 3040 passam a ser obrigatórios. Altera mapeamento ClassOp × ProvConsttd para percentuais mínimos revisados.',url:'https://www.bcb.gov.br',vigencia:'janeiro/2025',tags:['CADOC 3040','PCLD','ECL','Res. 4.966']},
-  {id:9,titulo:'Resolução BCB nº 519-521/2023 — Marco Regulatório de Ativos Virtuais (PSAVs)',tipo:'Resolução BCB',area:'câmbio',urgencia:'normal',data_pub:'2023-11-24',numero:'519',resumo:'Dispõe sobre autorização para PSAVs no Brasil. Exige comunicação ao BCB e reporte mensal via CADOC C212. Autorização obrigatória desde setembro/2025. Complementada pela Res. 396/2025 sobre capital mínimo.',url:'https://www.bcb.gov.br',vigencia:'setembro/2025',tags:['PSAV','C212','Marco Regulatório','Cripto']},
-  {id:10,titulo:'Resolução BCB nº 150/2021 — CADOC 6334 Cartões Credenciadores (ASPB034)',tipo:'Resolução BCB',area:'pagamentos',urgencia:'normal',data_pub:'2021-06-30',numero:'150',resumo:'Criou o CADOC 6334 (ASPB034) para reporte trimestral de dados de credenciamento, transações e infraestrutura. 10 arquivos TXT posicionais ISO-8859-1: DATABASE, CONCCRED, DESCONTO, INTERCAM, LUCRCRED, RANKING, INFRESTA, INFRTERM, CONTATOS, SEGMENTO.',url:'https://www.bcb.gov.br',vigencia:'junho/2021',tags:['CADOC 6334','Credenciadores','ASPB034','Trimestral']},
-  {id:11,titulo:'Resolução BCB nº 1/2020 — Open Finance: Fase 1 e Bases Regulatórias',tipo:'Resolução BCB',area:'tecnologia',urgencia:'normal',data_pub:'2020-05-04',numero:'1',resumo:'Estabelece as bases do Open Finance (Open Banking) no Brasil. Define fases de implementação, governança e padrões técnicos. IFs participantes devem implementar APIs abertas e reportar via CADOC 7011.',url:'https://www.bcb.gov.br',vigencia:'fevereiro/2021',tags:['Open Finance','CADOC 7011','API','Dados Abertos']},
-  {id:12,titulo:'Resolução BCB nº 264/2022 — Captação de Recursos no Exterior (CADOC 2300)',tipo:'Resolução BCB',area:'câmbio',urgencia:'normal',data_pub:'2022-09-22',numero:'264',resumo:'Regulamenta o envio do CADOC 2300 por IFs que realizam captações de recursos no exterior. Define prazos, formatos e informações obrigatórias para operações de câmbio e dívida externa.',url:'https://www.bcb.gov.br',vigencia:'outubro/2022',tags:['CADOC 2300','Câmbio','Captação','Exterior']},
+const SUGESTOES = [
+  'Quais CADOCs são obrigatórios para credenciadores?',
+  'O que muda para subcredenciadores com a Res. 522?',
+  'CADOC 3044 substitui o 3040?',
+  'Capital mínimo para SCD com conta Pix?',
+  'Quais os prazos críticos de 2026 para IPs?',
 ]
 
-const TIPO_CFG: Record<string,{bg:string,col:string,brd:string}> = {
-  'Resolução BCB':          {bg:C.redb,col:C.red,brd:C.redbrd},
-  'Resolução CMN':          {bg:C.blub,col:C.blu,brd:C.blubrd},
-  'Instrução Normativa BCB':{bg:C.pnkb,col:C.pnk,brd:C.pnkbrd},
-  'Circular BCB':           {bg:C.grnb,col:C.grn,brd:C.grnbrd},
+function parseRSSXml(xmlStr: string): RssItem[] {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(xmlStr, 'text/xml')
+  function cleanText(el: Element|null, maxLen?: number) {
+    if (!el) return ''
+    let raw = el.textContent || ''
+    if (raw.includes('<')) {
+      try { const tmp = new DOMParser().parseFromString(raw,'text/html'); raw = tmp.body.textContent||'' }
+      catch { raw = raw.replace(/<[^>]+>/g,'') }
+    }
+    const clean = raw.replace(/\s+/g,' ').trim()
+    return maxLen ? clean.substring(0,maxLen) : clean
+  }
+  const items: RssItem[] = []
+  doc.querySelectorAll('entry').forEach(el => {
+    const linkEl = el.querySelector("link[rel='alternate'], link")
+    items.push({ titulo:cleanText(el.querySelector('title')), link:linkEl?.getAttribute('href')||linkEl?.textContent?.trim()||'', descricao:cleanText(el.querySelector('content, summary'),250), data:el.querySelector('updated, published')?.textContent?.trim()||'', guid:el.querySelector('id')?.textContent?.trim()||'' })
+  })
+  if (!items.length) {
+    doc.querySelectorAll('item').forEach(el => {
+      items.push({ titulo:cleanText(el.querySelector('title')), link:el.querySelector('link')?.textContent?.trim()||'', descricao:cleanText(el.querySelector('description'),250), data:el.querySelector('pubDate')?.textContent?.trim()||'', guid:el.querySelector('guid')?.textContent?.trim()||'' })
+    })
+  }
+  return items
 }
 
-interface CardState { open:boolean; tab:'analise'|'resumo'|'cadoc'; analise?:string; loadingA?:boolean; loadingC?:boolean; cadocImpact?:string }
-type NID = number
+const _reg: Record<string,number> = {}
+function rssToNorma(item: RssItem, feedId: string): Norma {
+  const t = item.titulo||''
+  let tipo = 'Normativo BCB'
+  if (/Resolu[çc][ãa]o CMN/i.test(t)) tipo='Resolução CMN'
+  else if (/Resolu[çc][ãa]o Conjunta/i.test(t)) tipo='Resolução Conjunta'
+  else if (/Resolu[çc][ãa]o BCB/i.test(t)) tipo='Resolução BCB'
+  else if (/Instru[çc][ãa]o Normativa/i.test(t)) tipo='Instrução Normativa BCB'
+  else if (/Circular/i.test(t)&&!/Carta/i.test(t)) tipo='Circular BCB'
+  else if (/Carta Circular/i.test(t)) tipo='Carta Circular BCB'
+  else if (/Comunicado/i.test(t)) tipo='Comunicado BCB'
+  const txt=(t+' '+(item.descricao||'')).toLowerCase()
+  let urgencia='normal'
+  if (/pix|subcredenci|autoriza[çc][ãa]o|psav|liquidação centralizada|baas/i.test(txt)) urgencia='critica'
+  else if (/câmbio|cambio|cripto|ativo virtual|capital m[ií]nimo|credenciador|emissor/i.test(txt)) urgencia='alta'
+  let area='outros'
+  if (/pix|pagamento|credenciador|emissor|arranjo|subcredenci|baas/i.test(txt)) area='pagamentos'
+  else if (/cambio|câmbio|moeda estrangeira/i.test(txt)) area='câmbio'
+  else if (/cr[eé]dito|scr|cadoc 30/i.test(txt)) area='crédito'
+  else if (/capital|basileia|pr\b|rwa/i.test(txt)) area='capital'
+  else if (/ativo virtual|cripto|psav/i.test(txt)) area='tecnologia'
+  const rawId=item.guid||item.link||item.titulo||Math.random().toString()
+  if (!_reg[rawId]) _reg[rawId]=Object.keys(_reg).length+1000
+  const numMatch=t.match(/[Nn][ºo°]?\s*(\d+)/)
+  return { id:_reg[rawId], _rawId:rawId, tipo, numero:numMatch?.[1]||'', titulo:t.replace(/^BC\s*-\s*/,'').trim(), resumo:item.descricao||'', data_pub:(item.data||'').substring(0,10), area, urgencia, url:item.link||'', tags:[tipo], _feedId:feedId }
+}
 
 export default function NormasPage() {
-  const [q, setQ] = useState('')
+  const [rssData, setRssData] = useState<Record<string,{items:RssItem[];loading:boolean;error:string|null}>>({})
   const [area, setArea] = useState('all')
-  const [urg, setUrg] = useState('')
+  const [urgFilt, setUrgFilt] = useState('')
   const [tipos, setTipos] = useState<string[]>([])
-  const [cards, setCards] = useState<Record<NID,CardState>>({})
-  const [feedLoading, setFeedLoading] = useState(false)
-  const [feedMsg, setFeedMsg] = useState('')
-  const [chatOpen, setChatOpen] = useState(false)
-  const [chatMsgs, setChatMsgs] = useState<{role:'user'|'assistant',content:string}[]>([])
+  const [q, setQ] = useState('')
+  const [cards, setCards] = useState<Record<number,CardState>>({})
+  const [chatMsgs, setChatMsgs] = useState<{role:string;content:string}[]>([])
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [rssAno, setRssAno] = useState(new Date().getFullYear())
   const chatRef = useRef<HTMLDivElement>(null)
+  const G = '#0a7c5c'
+  const getKey = () => typeof window!=='undefined'?(localStorage.getItem('bm_api_key')||''):''
 
-  const getKey = () => typeof window!=='undefined' ? (localStorage.getItem('bm_api_key')||'') : ''
-
-  const loadFeed = async () => {
-    setFeedLoading(true)
-    setFeedMsg('Buscando normas vigentes em bcb.gov.br…')
-    await new Promise(r=>setTimeout(r,1800))
-    setFeedMsg('Processando feed RSS bcb.gov.br/normativos…')
-    await new Promise(r=>setTimeout(r,1200))
-    setFeedMsg('')
-    setFeedLoading(false)
-  }
-
-  const AREAS = [{id:'all',l:'Todas',ico:'◈'},{id:'pagamentos',l:'Pagamentos',ico:'💳'},{id:'crédito',l:'Crédito/SCR',ico:'📊'},{id:'tecnologia',l:'Tecnologia',ico:'⚡'},{id:'câmbio',l:'Câmbio/PSAV',ico:'🔄'},{id:'capital',l:'Capital',ico:'🏛'}]
-
-  let normas = NORMAS.filter(n => {
-    if (area!=='all'&&n.area!==area) return false
-    if (urg&&n.urgencia!==urg) return false
-    if (tipos.length&&!tipos.includes(n.tipo)) return false
-    if (q) { const ql=q.toLowerCase(); return n.titulo.toLowerCase().includes(ql)||n.resumo.toLowerCase().includes(ql)||(n.tags||[]).some(t=>t.toLowerCase().includes(ql)) }
-    return true
-  })
-  const tiposAll=[...new Set(NORMAS.map(n=>n.tipo))]
-  const urgCnt=NORMAS.reduce((a,n)=>{ a[n.urgencia]=(a[n.urgencia]||0)+1; return a },{} as Record<string,number>)
-
-  const setCtab = (id:NID, tab:'analise'|'resumo'|'cadoc') => setCards(prev=>({...prev,[id]:{...prev[id],open:true,tab}}))
-  const toggleCard = (id:NID) => setCards(prev=>({...prev,[id]:{...prev[id],tab:'analise',open:!prev[id]?.open}}))
-
-  const gerarAnalise = async (n: typeof NORMAS[0]) => {
-    const k=getKey(); if(!k){alert('Configure sua API key em Configurações');return}
-    setCards(prev=>({...prev,[n.id]:{...prev[n.id],open:true,tab:'analise',loadingA:true}}))
-    const impacts = CADOC_IMPACT[n.id]||[]
-    const impactStr = impacts.length ? `\nCADOCs impactados: ${[...new Set(impacts.map(i=>i.cadoc))].join(', ')}` : ''
+  const fetchFeed = useCallback(async (feed: typeof BCB_NORMA_FEEDS[0], ano?: number) => {
+    setRssData(prev=>({...prev,[feed.id]:{items:[],loading:true,error:null}}))
+    const url = feed.supAno ? `${feed.url}?ano=${ano||rssAno}` : feed.url
+    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),12000)
     try {
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:'Você é especialista em regulação do Banco Central do Brasil e compliance de CADOCs. Análises objetivas e práticas para IFs.',messages:[{role:'user',content:`Analise esta norma BCB em 4 tópicos (máx 100 palavras cada):\n**1. O que muda**\n**2. Quem é afetado**\n**3. CADOCs impactados e campos específicos**\n**4. Prazo e ação necessária**\n\nNorma: ${n.titulo}\nResumo: ${n.resumo}${impactStr}`}]})})
-      const d=await r.json(); const txt=d.content?.[0]?.text||'Análise não disponível'
-      setCards(prev=>({...prev,[n.id]:{...prev[n.id],loadingA:false,analise:txt}}))
-    } catch(e:any){setCards(prev=>({...prev,[n.id]:{...prev[n.id],loadingA:false,analise:'Erro: '+e.message}}))}
+      const r=await fetch(url,{signal:ctrl.signal,headers:{Accept:'application/atom+xml,*/*'}})
+      clearTimeout(timer)
+      if (r.ok) { const txt=await r.text(); const items=parseRSSXml(txt); setRssData(prev=>({...prev,[feed.id]:{items,loading:false,error:items.length?null:'Sem itens'}})) }
+      else setRssData(prev=>({...prev,[feed.id]:{items:[],loading:false,error:`HTTP ${r.status}`}}))
+    } catch(e:any) {
+      clearTimeout(timer)
+      const msg=e.name==='AbortError'?'Timeout':e.message?.includes('fetch')?'Bloqueado pelo sandbox — abra localmente para feeds ao vivo':e.message
+      setRssData(prev=>({...prev,[feed.id]:{items:[],loading:false,error:msg}}))
+    }
+  },[rssAno])
+
+  const fetchAll=useCallback(()=>{ BCB_NORMA_FEEDS.forEach(f=>fetchFeed(f)) },[fetchFeed])
+  useEffect(()=>{ fetchAll() },[])
+
+  const allNormas: Norma[] = (()=>{
+    const seen=new Set<string>(); const items: Norma[]=[]
+    BCB_NORMA_FEEDS.forEach(feed=>{ const d=rssData[feed.id]; if(d?.items?.length){ d.items.forEach(it=>{ const g=it.guid||it.link||it.titulo; if(!seen.has(g)){ seen.add(g); items.push(rssToNorma(it,feed.id)) } }) } })
+    return items.sort((a,b)=>(b.data_pub||'').localeCompare(a.data_pub||''))
+  })()
+
+  const isLoading=BCB_NORMA_FEEDS.some(f=>rssData[f.id]?.loading)
+  const hasError=!isLoading&&BCB_NORMA_FEEDS.every(f=>!rssData[f.id]?.items?.length)
+  let normas=allNormas
+  if(area!=='all') normas=normas.filter(n=>n.area===area)
+  if(urgFilt) normas=normas.filter(n=>n.urgencia===urgFilt)
+  if(tipos.length) normas=normas.filter(n=>tipos.includes(n.tipo))
+  if(q){const ql=q.toLowerCase();normas=normas.filter(n=>n.titulo.toLowerCase().includes(ql)||n.resumo.toLowerCase().includes(ql))}
+  const urgCnt=allNormas.reduce((a,n)=>{a[n.urgencia]=(a[n.urgencia]||0)+1;return a},{} as Record<string,number>)
+  const tiposAll=[...new Set(allNormas.map(n=>n.tipo))]
+  const fmt=(d:string)=>{try{return new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'})}catch{return d}}
+
+  const toggleCard=(id:number)=>setCards(prev=>({...prev,[id]:{...prev[id],tab:'analise',open:!prev[id]?.open}}))
+  const setTab=(id:number,tab:string)=>setCards(prev=>({...prev,[id]:{...prev[id],open:true,tab}}))
+
+  const gerarAnalise=async(n:Norma)=>{
+    const k=getKey(); if(!k){alert('Configure sua API key em Configurações');return}
+    setCards(prev=>({...prev,[n.id]:{...prev[n.id],open:true,tab:'analise',loading:true}}))
+    try {
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:'Você é especialista sênior em regulação financeira brasileira (BCB/CMN). Análises objetivas e práticas para IFs.',messages:[{role:'user',content:`Analise esta norma BCB em 4 tópicos (máx 90 palavras cada):\n**1. O que muda** — impacto prático e operacional\n**2. Quem é afetado** — tipos de IF, segmentos prudenciais\n**3. CADOCs impactados** — documentos BCB afetados, campos específicos, exemplo de mudança\n**4. Prazo e ação** — datas-limite e o que fazer\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})})
+      const d=await r.json()
+      setCards(prev=>({...prev,[n.id]:{...prev[n.id],loading:false,analise:d.content?.[0]?.text||'Análise não disponível'}}))
+    } catch(e:any){setCards(prev=>({...prev,[n.id]:{...prev[n.id],loading:false,analise:'Erro: '+e.message}}))}
   }
 
-  const sendChat = async () => {
-    const k=getKey(); if(!chatInput.trim()||chatBusy)return; if(!k){alert('Configure API key em Configurações');return}
+  const sendChat=async()=>{
+    const k=getKey(); if(!chatInput.trim()||chatBusy)return; if(!k){alert('Configure API key');return}
     const msg=chatInput.trim(); setChatInput(''); setChatMsgs(prev=>[...prev,{role:'user',content:msg}]); setChatBusy(true)
     try {
-      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:600,system:'Você é o Assistente Regulatório BACEN Monitor. Responda perguntas sobre normas BCB/CMN, CADOCs, SCR, SPB e compliance de IFs brasileiras. Cite sempre o número da norma e o CADOC impactado quando relevante.',messages:[...chatMsgs.map(m=>({role:m.role,content:m.content})),{role:'user',content:msg}]})})
-      const d=await r.json(); const txt=d.content?.[0]?.text||'Sem resposta'
-      setChatMsgs(prev=>[...prev,{role:'assistant',content:txt}])
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:700,system:'Você é o Assistente Regulatório BACEN Monitor. Responda sobre normas BCB/CMN, CADOCs, SCR, SPB e compliance de IFs brasileiras. Cite sempre o número da norma e o CADOC impactado quando relevante.',messages:[...chatMsgs.map(m=>({role:m.role,content:m.content})),{role:'user',content:msg}]})})
+      const d=await r.json(); setChatMsgs(prev=>[...prev,{role:'assistant',content:d.content?.[0]?.text||'Sem resposta'}])
     } catch(e:any){setChatMsgs(prev=>[...prev,{role:'assistant',content:'Erro: '+e.message}])}
     setChatBusy(false)
     setTimeout(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight},100)
   }
 
-  const fmt=(d:string)=>{try{return new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'})}catch{return d}}
+  const B='#e5e7eb',BG='#f9fafb',T='#111827',T3='#6b7280'
 
   return (
-    <div style={{display:'flex',height:'100%',overflow:'hidden',background:C.bg}}>
+    <div style={{display:'flex',height:'100%',overflow:'hidden',background:'#f0f2f7',fontFamily:"'Inter',system-ui,sans-serif"}}>
       {/* Sidebar */}
-      <div style={{width:186,flexShrink:0,borderRight:`1px solid ${C.brd}`,background:'#f9fafb',overflowY:'auto',padding:'10px 0',display:'flex',flexDirection:'column',gap:0}}>
-        <div style={{padding:'0 14px 6px',fontSize:8,letterSpacing:2,textTransform:'uppercase',color:C.txt3,fontFamily:'monospace',fontWeight:600}}>ÁREA</div>
-        {AREAS.map(a=>{
-          const cnt=a.id==='all'?NORMAS.length:NORMAS.filter(n=>n.area===a.id).length
-          return <div key={a.id} onClick={()=>setArea(a.id)} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 14px',cursor:'pointer',fontSize:12,color:area===a.id?C.grn:C.txt3,borderLeft:`2px solid ${area===a.id?C.grn:'transparent'}`,background:area===a.id?C.grnb:'transparent',fontWeight:area===a.id?600:400}}>
-            <span style={{fontSize:11}}>{a.ico}</span>{a.l}{cnt>0&&<span style={{marginLeft:'auto',fontSize:9,fontFamily:'monospace',background:area===a.id?C.grnb:'#f0f2f5',color:area===a.id?C.grn:C.txt3,padding:'1px 5px',borderRadius:8}}>{cnt}</span>}
+      <div style={{width:188,flexShrink:0,background:'#fff',borderRight:`1px solid ${B}`,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        {/* Year */}
+        <div style={{padding:'12px 14px',borderBottom:`1px solid ${B}`,flexShrink:0}}>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,marginBottom:6}}>ANO DO FEED</div>
+          <div style={{display:'flex',gap:4}}>
+            {[2026,2025,2024].map(a=>(
+              <button key={a} onClick={()=>{setRssAno(a);BCB_NORMA_FEEDS.forEach(f=>fetchFeed(f,a))}} style={{flex:1,padding:'4px',borderRadius:5,border:`1px solid ${rssAno===a?G:B}`,background:rssAno===a?G:'#fff',color:rssAno===a?'#fff':T3,fontSize:11,fontWeight:600,cursor:'pointer',outline:'none'}}>{a}</button>
+            ))}
           </div>
-        })}
-        <div style={{padding:'10px 14px 4px',marginTop:4,fontSize:8,letterSpacing:2,textTransform:'uppercase',color:C.txt3,fontFamily:'monospace',fontWeight:600}}>URGÊNCIA</div>
-        {[{id:'critica',l:'Crítica',c:C.red},{id:'alta',l:'Alta',c:C.amb},{id:'normal',l:'Normal',c:C.grn}].map(u=>(
-          <div key={u.id} onClick={()=>setUrg(urg===u.id?'':u.id)} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 14px',cursor:'pointer',fontSize:12,color:urg===u.id?u.c:C.txt3,borderLeft:`2px solid ${urg===u.id?u.c:'transparent'}`,background:urg===u.id?u.c+'12':'transparent'}}>
-            <div style={{width:5,height:5,borderRadius:'50%',background:u.c,flexShrink:0}}/>{u.l}{urgCnt[u.id]&&<span style={{marginLeft:'auto',fontSize:9,fontFamily:'monospace'}}>{urgCnt[u.id]}</span>}
+        </div>
+        {/* Areas */}
+        <div style={{padding:'6px 0',borderBottom:`1px solid ${B}`,flexShrink:0}}>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>ÁREA</div>
+          {AREAS.map(a=>{
+            const cnt=a.id==='all'?allNormas.length:allNormas.filter(n=>n.area===a.id).length
+            return(<div key={a.id} onClick={()=>setArea(a.id)} style={{display:'flex',alignItems:'center',gap:7,padding:'6px 14px',cursor:'pointer',color:area===a.id?G:T3,borderLeft:`2px solid ${area===a.id?G:'transparent'}`,background:area===a.id?'rgba(10,124,92,.07)':'transparent',fontSize:12,fontWeight:area===a.id?600:400}}>
+              <span style={{fontSize:11}}>{a.ico}</span><span style={{flex:1}}>{a.label}</span>
+              {cnt>0&&<span style={{fontSize:9,fontFamily:'monospace',background:area===a.id?G:BG,color:area===a.id?'#fff':T3,padding:'1px 5px',borderRadius:8}}>{cnt}</span>}
+            </div>)
+          })}
+        </div>
+        {/* Urgência */}
+        <div style={{padding:'6px 0',borderBottom:`1px solid ${B}`,flexShrink:0}}>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>URGÊNCIA</div>
+          {[{id:'critica',l:'Crítica',c:'#dc2626'},{id:'alta',l:'Alta',c:'#d97706'},{id:'normal',l:'Normal',c:G}].map(u=>(
+            <div key={u.id} onClick={()=>setUrgFilt(urgFilt===u.id?'':u.id)} style={{display:'flex',alignItems:'center',gap:7,padding:'6px 14px',cursor:'pointer',color:urgFilt===u.id?u.c:T3,borderLeft:`2px solid ${urgFilt===u.id?u.c:'transparent'}`,background:urgFilt===u.id?u.c+'12':'transparent',fontSize:12}}>
+              <div style={{width:6,height:6,borderRadius:'50%',background:u.c,flexShrink:0}}/><span style={{flex:1}}>{u.l}</span>
+              {urgCnt[u.id]&&<span style={{fontSize:9,fontFamily:'monospace'}}>{urgCnt[u.id]}</span>}
+            </div>
+          ))}
+        </div>
+        {/* Chat */}
+        <div style={{padding:'6px 0',flex:1}}>
+          <div style={{fontSize:9,fontWeight:700,letterSpacing:1.5,textTransform:'uppercase',color:T3,padding:'4px 14px 5px'}}>FERRAMENTAS</div>
+          <div onClick={()=>setChatOpen(!chatOpen)} style={{display:'flex',alignItems:'center',gap:7,padding:'7px 14px',cursor:'pointer',color:chatOpen?G:T3,borderLeft:`2px solid ${chatOpen?G:'transparent'}`,background:chatOpen?'rgba(10,124,92,.07)':'transparent',fontSize:12}}>
+            <span>🤖</span><span style={{flex:1}}>Assistente IA</span>
+            <span style={{fontSize:8,fontWeight:800,background:G,color:'#fff',padding:'1px 4px',borderRadius:2}}>IA</span>
           </div>
-        ))}
-        <div style={{padding:'10px 14px 4px',marginTop:4,fontSize:8,letterSpacing:2,textTransform:'uppercase',color:C.txt3,fontFamily:'monospace',fontWeight:600}}>FERRAMENTAS</div>
-        <div onClick={()=>setChatOpen(!chatOpen)} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 14px',cursor:'pointer',fontSize:12,color:chatOpen?C.grn:C.txt3,borderLeft:`2px solid ${chatOpen?C.grn:'transparent'}`,background:chatOpen?C.grnb:'transparent'}}>
-          <span>🤖</span>Assistente IA<span style={{marginLeft:'auto',fontSize:8,fontFamily:'monospace',background:C.grn,color:'#fff',padding:'1px 4px',borderRadius:2,fontWeight:800}}>IA</span>
+        </div>
+        {/* Status */}
+        <div style={{padding:'10px 14px',borderTop:`1px solid ${B}`,flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:isLoading?'#d97706':hasError?'#dc2626':G,boxShadow:isLoading?'none':`0 0 5px ${hasError?'#dc2626':G}`}}/>
+            <span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>{isLoading?'Carregando…':hasError?'Feeds indisponíveis':`${allNormas.length} normas · ${rssAno}`}</span>
+          </div>
         </div>
       </div>
 
       {/* Main */}
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minWidth:0}}>
         {/* Toolbar */}
-        <div style={{padding:'8px 14px',borderBottom:`1px solid ${C.brd}`,background:'#fff',display:'flex',alignItems:'center',gap:8,flexShrink:0,flexWrap:'wrap'}}>
-          <div style={{flex:1,minWidth:200,display:'flex',alignItems:'center',gap:7,background:'#fff',border:`1px solid ${C.brd}`,borderRadius:6,padding:'6px 10px'}}>
-            <span style={{color:C.txt3,fontSize:14}}>⌕</span>
-            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar normas, CADOCs, temas regulatórios…" style={{flex:1,border:'none',outline:'none',background:'transparent',fontSize:12,color:C.txt}}/>
-            {q&&<span onClick={()=>setQ('')} style={{cursor:'pointer',color:C.txt3,fontSize:11}}>✕</span>}
+        <div style={{padding:'8px 16px',background:'#fff',borderBottom:`1px solid ${B}`,display:'flex',alignItems:'center',gap:8,flexShrink:0,flexWrap:'wrap'}}>
+          <div style={{display:'flex',alignItems:'center',gap:7,background:'#fff',border:`1px solid ${B}`,borderRadius:8,padding:'6px 10px',flex:1,minWidth:200,boxShadow:'0 1px 3px rgba(0,0,0,.04)'}}>
+            <span style={{color:T3,fontSize:14}}>⌕</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar normas, CADOCs, temas…" style={{flex:1,border:'none',outline:'none',background:'transparent',fontSize:12.5,color:T,fontFamily:'inherit'}}/>
+            {q&&<span onClick={()=>setQ('')} style={{cursor:'pointer',color:T3,fontSize:11}}>✕</span>}
           </div>
-          <button onClick={loadFeed} disabled={feedLoading} style={{padding:'7px 14px',borderRadius:7,border:`1px solid ${feedLoading?C.grn:C.brd}`,background:feedLoading?C.grnb:'#fff',cursor:feedLoading?'wait':'pointer',fontSize:11,fontWeight:600,color:feedLoading?C.grn:C.txt2,outline:'none',display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
-            {feedLoading?<><span style={{display:'inline-block',width:10,height:10,border:'2px solid',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite'}}/>{feedMsg.substring(0,30)}…</>:<>↻ Carregar Feed BCB</>}
+          <button onClick={fetchAll} disabled={isLoading} style={{padding:'7px 14px',borderRadius:7,border:`1px solid ${B}`,background:'#fff',cursor:isLoading?'wait':'pointer',fontSize:11,fontWeight:600,color:'#374151',outline:'none',display:'flex',alignItems:'center',gap:6,whiteSpace:'nowrap'}}>
+            {isLoading?<><span style={{display:'inline-block',width:11,height:11,border:'2px solid',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite'}}/>Carregando…</>:<>↻ Atualizar Feed BCB</>}
           </button>
-          {urg&&<button onClick={()=>setUrg('')} style={{fontSize:10,padding:'4px 10px',borderRadius:5,border:`1px solid ${C.redbrd}`,background:C.redb,color:C.red,cursor:'pointer',outline:'none'}}>✕ {urg}</button>}
+          {urgFilt&&<button onClick={()=>setUrgFilt('')} style={{fontSize:10.5,padding:'4px 10px',borderRadius:5,border:'1px solid rgba(220,38,38,.2)',background:'rgba(220,38,38,.08)',color:'#dc2626',cursor:'pointer',outline:'none'}}>✕ {urgFilt}</button>}
         </div>
-        {/* Type pills */}
-        <div style={{padding:'6px 14px',borderBottom:`1px solid ${C.brd}`,background:'#fff',display:'flex',gap:5,flexWrap:'wrap',flexShrink:0}}>
-          {tiposAll.map(t=>(
-            <button key={t} onClick={()=>setTipos(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t])} style={{padding:'3px 9px',borderRadius:20,fontSize:9.5,fontWeight:500,border:`1px solid ${tipos.includes(t)?C.grn:C.brd}`,cursor:'pointer',background:tipos.includes(t)?C.grn:'#fff',color:tipos.includes(t)?'#fff':C.txt2,outline:'none'}}>{t}</button>
-          ))}
-          {tipos.length>0&&<button onClick={()=>setTipos([])} style={{padding:'3px 9px',borderRadius:20,fontSize:9.5,fontWeight:700,border:`1px solid ${C.red}`,cursor:'pointer',background:C.red,color:'#fff',outline:'none'}}>✕ Limpar</button>}
+        {/* Tipo pills */}
+        <div style={{padding:'6px 16px',background:'#fff',borderBottom:`1px solid ${B}`,display:'flex',gap:5,flexWrap:'wrap',flexShrink:0}}>
+          {tiposAll.map(t=>{
+            const cfg=TIPO_CFG[t]||{color:T3,bg:BG}
+            return(<button key={t} onClick={()=>setTipos(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t])} style={{padding:'3px 9px',borderRadius:20,fontSize:10,fontWeight:500,cursor:'pointer',outline:'none',border:`1px solid ${tipos.includes(t)?cfg.color:B}`,background:tipos.includes(t)?cfg.color:'#fff',color:tipos.includes(t)?'#fff':'#374151',transition:'all .12s'}}>{t}</button>)
+          })}
+          {tipos.length>0&&<button onClick={()=>setTipos([])} style={{padding:'3px 9px',borderRadius:20,fontSize:10,fontWeight:700,border:'1px solid #dc2626',cursor:'pointer',background:'#dc2626',color:'#fff',outline:'none'}}>✕ Limpar</button>}
         </div>
 
         {/* Feed */}
         <div style={{flex:1,overflowY:'auto',padding:'14px 16px'}}>
-          <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:10,gap:10,flexWrap:'wrap'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8}}>
             <div>
-              <h1 style={{fontSize:16,fontWeight:700,color:C.txt,letterSpacing:'-.4px',marginBottom:2}}>Normas BCB/CMN Vigentes</h1>
-              <span style={{fontSize:10,color:C.txt3,fontFamily:'monospace'}}>{normas.length} normas · {NORMAS.filter(n=>n.urgencia==='critica').length} críticas · Feed regulatório BCB</span>
-            </div>
-            <div style={{fontSize:10,color:C.txt3,fontFamily:'monospace',background:C.bg3,padding:'4px 8px',borderRadius:5,border:`1px solid ${C.brd}`}}>
-              Última atualização: {new Date().toLocaleDateString('pt-BR')}
+              <h1 style={{fontSize:17,fontWeight:800,color:T,margin:'0 0 2px',letterSpacing:'-.4px'}}>{area==='all'?'Normas BCB/CMN Vigentes':AREAS.find(a=>a.id===area)?.label}</h1>
+              <span style={{fontSize:11,color:T3,fontFamily:'monospace'}}>{isLoading?'Buscando feeds ao vivo em bcb.gov.br…':`${normas.length} normas · feed ao vivo bcb.gov.br · ${rssAno}`}</span>
             </div>
           </div>
 
-          {normas.map(n=>{
-            const cs=cards[n.id]||{open:false,tab:'analise' as const}
-            const cfg=TIPO_CFG[n.tipo]||{bg:C.pnkb,col:C.pnk,brd:C.pnkbrd}
-            const impacts=CADOC_IMPACT[n.id]||[]
-            const urgEl=n.urgencia==='critica'?<span style={{fontSize:8.5,fontWeight:700,fontFamily:'monospace',padding:'2px 6px',borderRadius:3,border:`1px solid ${C.redbrd}`,background:C.redb,color:C.red}}>⚠ Crítica</span>
-              :n.urgencia==='alta'?<span style={{fontSize:8.5,fontWeight:700,fontFamily:'monospace',padding:'2px 6px',borderRadius:3,border:`1px solid ${C.ambbrd}`,background:C.ambb,color:C.amb}}>↑ Alta</span>:null
+          {isLoading&&!allNormas.length&&(
+            <div style={{padding:'48px',textAlign:'center',color:T3}}>
+              <div style={{width:32,height:32,border:`3px solid ${G}`,borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite',margin:'0 auto 12px'}}/>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Carregando normas do BCB…</div>
+              <div style={{fontSize:11,fontFamily:'monospace'}}>bcb.gov.br/api/feed/app/normativos · {rssAno}</div>
+            </div>
+          )}
 
-            return (
-              <div key={n.id} style={{background:'#fff',border:`1px solid ${cs.open?C.brd2:C.brd}`,borderRadius:10,marginBottom:6,boxShadow:cs.open?'0 4px 16px rgba(0,0,0,.08)':'0 1px 4px rgba(0,0,0,.04)',overflow:'hidden',position:'relative'}}>
-                <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:cfg.col,opacity:cs.open?1:0,transition:'opacity .15s'}}/>
-                <div onClick={()=>toggleCard(n.id)} style={{padding:'11px 14px 11px 18px',cursor:'pointer',userSelect:'none'}}>
-                  <div style={{fontSize:12.5,fontWeight:600,color:C.txt,lineHeight:1.5,marginBottom:6}}>{n.titulo}</div>
+          {!isLoading&&hasError&&(
+            <div style={{padding:'32px',textAlign:'center',background:'#fff',borderRadius:12,border:`1px solid ${B}`}}>
+              <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
+              <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>Feeds BCB indisponíveis</div>
+              <div style={{fontSize:11,color:T3,marginBottom:14,lineHeight:1.6,maxWidth:400,margin:'0 auto 14px'}}>Pode ser bloqueio CORS do sandbox. <strong>Abra o BACEN Monitor Original localmente</strong> para feeds ao vivo.<br/>O BCB serve com CORS aberto — funciona normalmente fora do sandbox.</div>
+              <div style={{display:'flex',gap:10,justifyContent:'center',flexWrap:'wrap'}}>
+                <button onClick={fetchAll} style={{padding:'8px 18px',borderRadius:8,border:'none',background:G,color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',outline:'none'}}>↻ Tentar novamente</button>
+                <a href="/dashboard/cadocs" style={{padding:'8px 18px',borderRadius:8,border:`1px solid ${B}`,background:'#fff',color:'#374151',fontSize:12,fontWeight:600,textDecoration:'none'}}>📋 Ir para CADOC Original</a>
+              </div>
+            </div>
+          )}
+
+          {!isLoading&&!hasError&&normas.length===0&&(
+            <div style={{padding:'48px',textAlign:'center',color:T3}}>
+              <div style={{fontSize:28,marginBottom:8}}>📄</div>
+              <div style={{fontSize:13,fontWeight:600}}>Nenhuma norma encontrada</div>
+              <div style={{fontSize:11,marginTop:4}}>Ajuste os filtros ou aguarde o carregamento.</div>
+            </div>
+          )}
+
+          {normas.map(n=>{
+            const cs=cards[n.id]||{open:false,tab:'analise'}
+            const cfg=TIPO_CFG[n.tipo]||{color:T3,bg:BG}
+            const urgC=n.urgencia==='critica'?'#dc2626':n.urgencia==='alta'?'#d97706':G
+            const urgBg=n.urgencia==='critica'?'rgba(220,38,38,.08)':n.urgencia==='alta'?'rgba(217,119,6,.08)':'rgba(10,124,92,.06)'
+            const urgBrd=n.urgencia==='critica'?'rgba(220,38,38,.2)':n.urgencia==='alta'?'rgba(217,119,6,.2)':'rgba(10,124,92,.2)'
+            return(
+              <div key={n.id} style={{background:'#fff',border:`1px solid ${B}`,borderRadius:10,marginBottom:6,boxShadow:cs.open?'0 4px 16px rgba(0,0,0,.08)':'0 1px 3px rgba(0,0,0,.04)',overflow:'hidden',position:'relative',borderLeft:`3px solid ${cs.open?cfg.color:'transparent'}`,transition:'border-color .15s'}}>
+                <div onClick={()=>toggleCard(n.id)} style={{padding:'11px 14px',cursor:'pointer',userSelect:'none'}}>
+                  <div style={{fontSize:13,fontWeight:600,color:T,lineHeight:1.5,marginBottom:6}}>{n.titulo}</div>
                   <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
-                    <span style={{padding:'2px 6px',borderRadius:3,fontSize:8.5,fontWeight:700,letterSpacing:'.3px',fontFamily:'monospace',border:`1px solid ${cfg.brd}`,background:cfg.bg,color:cfg.col}}>{n.tipo}</span>
-                    <span style={{fontSize:8,padding:'1px 5px',border:`1px solid ${C.grnbrd}`,borderRadius:2,background:C.grnb,color:C.grn,fontFamily:'monospace'}}>✓ Vigente desde {n.vigencia}</span>
-                    <span style={{fontSize:9.5,color:C.txt3,fontFamily:'monospace'}}>📅 {fmt(n.data_pub)}</span>
-                    {n.numero&&<span style={{fontSize:9.5,color:C.txt3,fontFamily:'monospace'}}>#{n.numero}</span>}
-                    {urgEl}
-                    {impacts.length>0&&<span style={{fontSize:8.5,fontFamily:'monospace',color:C.cyn,background:C.cynb,border:`1px solid ${C.cynbrd}`,padding:'1px 5px',borderRadius:3}}>⚙ {[...new Set(impacts.map(i=>i.cadoc))].join(' · ')}</span>}
+                    <span style={{padding:'2px 7px',borderRadius:4,fontSize:9,fontWeight:700,letterSpacing:'.3px',border:`1px solid ${cfg.color}40`,background:cfg.bg,color:cfg.color}}>{n.tipo}</span>
+                    {n.data_pub&&<span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>📅 {fmt(n.data_pub)}</span>}
+                    {n.numero&&<span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>#{n.numero}</span>}
+                    <span style={{fontSize:9,fontWeight:700,padding:'2px 7px',borderRadius:3,border:`1px solid ${urgBrd}`,background:urgBg,color:urgC,fontFamily:'monospace'}}>{n.urgencia==='critica'?'⚠ CRÍTICA':n.urgencia==='alta'?'↑ ALTA':'● NORMAL'}</span>
+                    <span style={{marginLeft:'auto',fontSize:11,color:T3}}>{cs.open?'▲':'▼'}</span>
                   </div>
                 </div>
 
                 {cs.open&&(
-                  <div style={{borderTop:`1px solid ${C.brd}`}}>
-                    {/* Tabs */}
-                    <div style={{display:'flex',background:C.bg3,borderBottom:`1px solid ${C.brd}`}}>
-                      {([['analise','🤖 Análise IA'],['cadoc','⚙ CADOCs Impactados'],['resumo','📄 Resumo']] as [string,string][]).map(([t,l])=>(
-                        <div key={t} onClick={()=>setCtab(n.id,t as any)} style={{flex:1,padding:'8px 4px',textAlign:'center',fontSize:9.5,fontWeight:600,color:cs.tab===t?C.grn:C.txt3,cursor:'pointer',borderBottom:cs.tab===t?`2px solid ${C.grn}`:'2px solid transparent',marginBottom:-1,letterSpacing:'.4px',textTransform:'uppercase',userSelect:'none'}}>
-                          {l}{t==='cadoc'&&impacts.length>0&&<span style={{marginLeft:4,fontSize:8,fontWeight:800,background:C.red,color:'#fff',padding:'0px 4px',borderRadius:2}}>{impacts.length}</span>}
-                        </div>
+                  <div style={{borderTop:`1px solid ${B}`}}>
+                    <div style={{display:'flex',background:'#f3f4f6',borderBottom:`1px solid ${B}`}}>
+                      {([['analise','🤖 Análise IA'],['resumo','📄 Resumo']] as [string,string][]).map(([t,l])=>(
+                        <div key={t} onClick={()=>setTab(n.id,t)} style={{flex:1,padding:'8px 4px',textAlign:'center',fontSize:10,fontWeight:600,color:cs.tab===t?G:T3,cursor:'pointer',borderBottom:cs.tab===t?`2px solid ${G}`:'2px solid transparent',marginBottom:-1,letterSpacing:'.4px',textTransform:'uppercase',userSelect:'none'}}>{l}</div>
                       ))}
                     </div>
-
-                    <div style={{padding:'13px 14px'}}>
-                      {/* ANÁLISE IA */}
+                    <div style={{padding:'12px 14px'}}>
                       {cs.tab==='analise'&&(
                         <div>
-                          <div style={{background:C.bg3,border:`1px solid ${C.brd}`,borderRadius:8,padding:12,marginBottom:10}}>
+                          <div style={{background:'#f9fafb',border:`1px solid ${B}`,borderRadius:8,padding:10,marginBottom:8}}>
                             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
-                              <span style={{fontSize:8,letterSpacing:1.5,textTransform:'uppercase',fontFamily:'monospace',fontWeight:700,color:C.grn,background:C.grnb,padding:'2px 7px',borderRadius:3,border:`1px solid ${C.grnbrd}`}}>Análise IA</span>
-                              <span style={{fontSize:9.5,color:C.txt3,fontFamily:'monospace'}}>Anthropic · Claude Sonnet 4.6</span>
-                              <a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:9.5,color:C.blu,fontFamily:'monospace',display:'flex',alignItems:'center',gap:4,padding:'3px 8px',border:`1px solid ${C.blubrd}`,borderRadius:4,background:C.blub,textDecoration:'none'}}>📎 Norma Oficial BCB ↗</a>
+                              <span style={{fontSize:8.5,letterSpacing:1,textTransform:'uppercase',fontFamily:'monospace',fontWeight:700,color:G,background:'rgba(10,124,92,.08)',padding:'2px 7px',borderRadius:3,border:'1px solid rgba(10,124,92,.2)'}}>Análise IA</span>
+                              <span style={{fontSize:9.5,color:T3,fontFamily:'monospace'}}>Claude Sonnet 4.6</span>
+                              <a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:9.5,color:'#1d5fcc',fontFamily:'monospace',padding:'2px 8px',border:'1px solid rgba(29,95,204,.3)',borderRadius:4,background:'rgba(29,95,204,.06)',textDecoration:'none'}}>↗ Norma BCB</a>
                             </div>
-                            {cs.loadingA?(
+                            {cs.loading?(
                               <div style={{display:'flex',gap:5,alignItems:'center',padding:'8px 0'}}>
-                                {[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:C.grn,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}
-                                <span style={{fontSize:10,color:C.txt3,marginLeft:4}}>Analisando norma com IA…</span>
+                                {[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:G,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}
+                                <span style={{fontSize:10,color:T3,marginLeft:4}}>Analisando norma…</span>
                               </div>
                             ):cs.analise?(
-                              <div style={{fontSize:12,color:C.txt,lineHeight:1.8,whiteSpace:'pre-wrap'}} dangerouslySetInnerHTML={{__html:(cs.analise||'').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/>
+                              <div style={{fontSize:12,color:T,lineHeight:1.8,whiteSpace:'pre-wrap'}} dangerouslySetInnerHTML={{__html:(cs.analise||'').replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/>
                             ):(
-                              <div style={{fontSize:10.5,color:C.txt3}}>Clique em "Gerar Análise" para análise contextualizada desta norma com Claude.</div>
+                              <div style={{fontSize:11,color:T3}}>Clique em "Gerar Análise" para análise contextualizada desta norma com Claude.</div>
                             )}
                           </div>
-                          {!cs.loadingA&&!cs.analise&&(
-                            <button onClick={()=>gerarAnalise(n)} style={{padding:'7px 14px',background:C.grn,color:'#000',border:'none',borderRadius:7,fontWeight:700,fontSize:12,cursor:'pointer',outline:'none'}}>✦ Gerar Análise IA</button>
-                          )}
-                          {cs.analise&&!cs.loadingA&&(
-                            <button onClick={()=>{setCards(prev=>({...prev,[n.id]:{...prev[n.id],analise:undefined}}));gerarAnalise(n)}} style={{padding:'5px 10px',background:'none',color:C.grn,border:`1px solid ${C.grnbrd}`,borderRadius:5,fontSize:10,cursor:'pointer',outline:'none'}}>↻ Regenerar</button>
-                          )}
+                          {!cs.loading&&!cs.analise&&<button onClick={()=>gerarAnalise(n)} style={{padding:'7px 14px',background:G,color:'#fff',border:'none',borderRadius:7,fontWeight:700,fontSize:12,cursor:'pointer',outline:'none'}}>✦ Gerar Análise IA</button>}
+                          {cs.analise&&!cs.loading&&<button onClick={()=>{setCards(prev=>({...prev,[n.id]:{...prev[n.id],analise:undefined}}));gerarAnalise(n)}} style={{padding:'5px 10px',background:'none',color:G,border:'1px solid rgba(10,124,92,.2)',borderRadius:5,fontSize:10,cursor:'pointer',outline:'none'}}>↻ Regenerar</button>}
                         </div>
                       )}
-
-                      {/* CADOCs IMPACTADOS */}
-                      {cs.tab==='cadoc'&&(
-                        <div>
-                          {impacts.length>0?(
-                            <div>
-                              <div style={{fontSize:11,color:C.txt3,marginBottom:10}}>Esta norma impacta os seguintes CADOCs — campos específicos, tipo de mudança e exemplos:</div>
-                              {impacts.map((imp,i)=>(
-                                <div key={i} style={{border:`1px solid ${C.brd}`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
-                                  <div style={{padding:'8px 12px',background:C.bg3,borderBottom:`1px solid ${C.brd}`,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-                                    <span style={{fontFamily:'monospace',fontSize:11,fontWeight:800,color:C.cyn,background:C.cynb,border:`1px solid ${C.cynbrd}`,padding:'2px 8px',borderRadius:4}}>CADOC {imp.cadoc}</span>
-                                    <span style={{fontFamily:'monospace',fontSize:10,fontWeight:700,color:C.txt2}}>{imp.campo}</span>
-                                    <span style={{fontSize:9,fontWeight:700,padding:'2px 6px',borderRadius:3,border:`1px solid ${C.ambbrd}`,background:C.ambb,color:C.amb,fontFamily:'monospace'}}>{imp.tipo}</span>
-                                  </div>
-                                  <div style={{padding:'10px 12px'}}>
-                                    <div style={{fontSize:11,color:C.txt,marginBottom:8}}>{imp.descImpacto}</div>
-                                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                                      <div>
-                                        <div style={{fontSize:9,fontWeight:700,color:C.red,fontFamily:'monospace',marginBottom:4}}>ANTES (versão anterior):</div>
-                                        <pre style={{padding:'8px',fontFamily:'"JetBrains Mono","Courier New",monospace',fontSize:9.5,color:'#94a3b8',background:'#0f172a',borderRadius:6,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-all',lineHeight:1.5}}>{imp.exemploAntes}</pre>
-                                      </div>
-                                      <div>
-                                        <div style={{fontSize:9,fontWeight:700,color:C.grn,fontFamily:'monospace',marginBottom:4}}>DEPOIS (nova exigência):</div>
-                                        <pre style={{padding:'8px',fontFamily:'"JetBrains Mono","Courier New",monospace',fontSize:9.5,color:'#86efac',background:'#0f172a',borderRadius:6,margin:0,whiteSpace:'pre-wrap',wordBreak:'break-all',lineHeight:1.5}}>{imp.exemploDepois}</pre>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ):(
-                            <div style={{padding:16,textAlign:'center',color:C.txt3,fontSize:11}}>
-                              <div style={{fontSize:24,marginBottom:8}}>⚙</div>
-                              Nenhum impacto específico de CADOC mapeado para esta norma.
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* RESUMO */}
                       {cs.tab==='resumo'&&(
                         <div>
-                          <p style={{fontSize:12,color:C.txt,lineHeight:1.75,marginBottom:12}}>{n.resumo}</p>
-                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',paddingTop:10,borderTop:`1px solid ${C.brd}`}}>
-                            <span style={{fontSize:8,fontFamily:'monospace',color:C.grn,background:C.grnb,border:`1px solid ${C.grnbrd}`,padding:'1px 5px',borderRadius:2}}>✓ Vigente desde {n.vigencia}</span>
-                            {(n.tags||[]).slice(0,4).map(t=><span key={t} style={{padding:'2px 8px',borderRadius:4,fontSize:9.5,background:C.bg3,color:C.txt2,fontWeight:500}}>{t}</span>)}
-                            <a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:10,color:C.blu,fontFamily:'monospace',textDecoration:'none'}}>↗ Referência BCB</a>
+                          {n.resumo?<p style={{fontSize:12,color:T,lineHeight:1.75,marginBottom:10}}>{n.resumo}</p>:<p style={{fontSize:11,color:T3}}>Resumo não disponível neste feed.</p>}
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',paddingTop:8,borderTop:`1px solid ${B}`}}>
+                            {n.data_pub&&<span style={{fontSize:9.5,fontFamily:'monospace',color:G,background:'rgba(10,124,92,.08)',border:'1px solid rgba(10,124,92,.2)',padding:'1px 6px',borderRadius:3}}>✓ {fmt(n.data_pub)}</span>}
+                            <span style={{fontSize:10,padding:'2px 8px',borderRadius:4,background:'#f3f4f6',color:'#374151'}}>{n.tipo}</span>
+                            {n.url&&<a href={n.url} target="_blank" rel="noreferrer" style={{marginLeft:'auto',fontSize:10,color:'#1d5fcc',textDecoration:'none'}}>↗ Referência BCB</a>}
                           </div>
                         </div>
                       )}
@@ -327,31 +349,26 @@ export default function NormasPage() {
 
       {/* Chat */}
       {chatOpen&&(
-        <div style={{width:280,flexShrink:0,borderLeft:`1px solid ${C.brd}`,background:'#fff',display:'flex',flexDirection:'column',overflow:'hidden'}}>
-          <div style={{padding:'10px 14px',borderBottom:`1px solid ${C.brd}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
-            <span style={{fontSize:12,fontWeight:700,color:C.txt}}>🤖 Assistente IA Regulatório</span>
-            <button onClick={()=>setChatOpen(false)} style={{background:'none',border:'none',cursor:'pointer',color:C.txt3,fontSize:14,outline:'none'}}>✕</button>
+        <div style={{width:275,flexShrink:0,borderLeft:`1px solid ${B}`,background:'#fff',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          <div style={{padding:'11px 14px',borderBottom:`1px solid ${B}`,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+            <span style={{fontSize:12,fontWeight:700,color:T}}>🤖 Assistente Regulatório</span>
+            <button onClick={()=>setChatOpen(false)} style={{background:'none',border:'none',cursor:'pointer',color:T3,fontSize:14,outline:'none'}}>✕</button>
           </div>
-          {chatMsgs.length===0&&(
-            <div style={{padding:'12px 14px',flexShrink:0}}>
-              <div style={{fontSize:10,color:C.txt3,marginBottom:8}}>Perguntas sugeridas:</div>
-              {['Quais CADOCs são obrigatórios para credenciadores?','O CADOC 3044 substitui o 3040?','O que muda com a Res. BCB 403/2025?','Como preencher ContInstFinRes4966?'].map(s=>(
-                <div key={s} onClick={()=>{setChatInput(s)}} style={{padding:'6px 10px',fontSize:10,color:C.txt2,background:C.bg3,border:`1px solid ${C.brd}`,borderRadius:6,marginBottom:4,cursor:'pointer',lineHeight:1.4}}>{s}</div>
-              ))}
-            </div>
-          )}
-          <div ref={chatRef} style={{flex:1,overflowY:'auto',padding:'10px 14px'}}>
+          {chatMsgs.length===0&&<div style={{padding:'10px 12px',flexShrink:0}}>
+            <div style={{fontSize:10,color:T3,marginBottom:6}}>Sugestões:</div>
+            {SUGESTOES.map(s=><div key={s} onClick={()=>setChatInput(s)} style={{padding:'5px 9px',fontSize:10,color:'#374151',background:'#f3f4f6',border:`1px solid ${B}`,borderRadius:6,marginBottom:4,cursor:'pointer',lineHeight:1.4}}>{s}</div>)}
+          </div>}
+          <div ref={chatRef} style={{flex:1,overflowY:'auto',padding:'10px 12px'}}>
             {chatMsgs.map((m,i)=>(
               <div key={i} style={{marginBottom:10,display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
-                <div style={{maxWidth:'88%',padding:'8px 11px',borderRadius:m.role==='user'?'10px 10px 2px 10px':'10px 10px 10px 2px',background:m.role==='user'?C.grn:'#f0f2f5',color:m.role==='user'?'#fff':C.txt,fontSize:11,lineHeight:1.6}}
-                  dangerouslySetInnerHTML={{__html:m.content.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/> 
+                <div style={{maxWidth:'88%',padding:'8px 11px',borderRadius:m.role==='user'?'10px 10px 2px 10px':'10px 10px 10px 2px',background:m.role==='user'?G:'#f0f2f5',color:m.role==='user'?'#fff':T,fontSize:11,lineHeight:1.6}} dangerouslySetInnerHTML={{__html:m.content.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br/>')}}/>
               </div>
             ))}
-            {chatBusy&&<div style={{display:'flex',gap:4,padding:'4px 0'}}>{[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:C.grn,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}</div>}
+            {chatBusy&&<div style={{display:'flex',gap:4,padding:'4px 0'}}>{[0,1,2].map(i=><div key={i} style={{width:5,height:5,borderRadius:'50%',background:G,animation:`ald 1.2s ${i*.2}s infinite`}}/>)}</div>}
           </div>
-          <div style={{padding:'10px 12px',borderTop:`1px solid ${C.brd}`,display:'flex',gap:6,flexShrink:0}}>
-            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendChat()} placeholder="Pergunte sobre normas BCB…" style={{flex:1,padding:'7px 10px',border:`1px solid ${C.brd}`,borderRadius:7,fontSize:11,outline:'none',fontFamily:'inherit'}}/>
-            <button onClick={sendChat} disabled={chatBusy||!chatInput.trim()} style={{padding:'7px 12px',background:C.grn,color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:11,fontWeight:700,outline:'none'}}>→</button>
+          <div style={{padding:'10px 12px',borderTop:`1px solid ${B}`,display:'flex',gap:6,flexShrink:0}}>
+            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendChat()} placeholder="Pergunte sobre normas BCB…" style={{flex:1,padding:'7px 10px',border:`1px solid ${B}`,borderRadius:7,fontSize:11,outline:'none',fontFamily:'inherit'}}/>
+            <button onClick={sendChat} disabled={chatBusy||!chatInput.trim()} style={{padding:'7px 12px',background:G,color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:11,fontWeight:700,outline:'none'}}>→</button>
           </div>
         </div>
       )}
