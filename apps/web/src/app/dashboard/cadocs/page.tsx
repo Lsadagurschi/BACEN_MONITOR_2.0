@@ -520,61 +520,159 @@ export default function CadocsPage() {
           {/* Erro de JSON */}
           {jsonErr && <div style={{ padding:'9px 14px', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:8, fontSize:12, color:'#dc2626', marginBottom:12 }}>❌ {jsonErr}</div>}
 
-          {/* Resultado */}
-          {step >= 3 && status && output && (
-            <div style={{ background:'#fff', border:`1px solid ${stCor}40`, borderRadius:10, overflow:'hidden', marginBottom:12 }}>
-              {/* Header resultado */}
-              <div style={{ padding:'10px 14px', background: stCor + '08', borderBottom:`1px solid ${stCor}25`, display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
-                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                  <span style={{ fontSize:13, fontWeight:700, color:'#111827' }}>Resultado — CADOC {cadoc}</span>
-                  <div style={{ display:'flex', gap:10 }}>
-                    <span style={{ fontSize:11, color:'#dc2626', fontWeight:700, fontFamily:'monospace' }}>{erros.length} erro(s)</span>
-                    <span style={{ fontSize:11, color:'#d97706', fontWeight:700, fontFamily:'monospace' }}>{avisos.length} aviso(s)</span>
+          {/* ── Dashboard de Resultado ── */}
+          {step >= 3 && status && output && (() => {
+            let obj: any = {}
+            try { obj = JSON.parse(json) } catch {}
+
+            // Extrai métricas do CADOC processado
+            const totalOps   = cadoc==='3040' ? (obj.clientes||[]).reduce((a:number,c:any)=>a+(c.operacoes||[]).length,0)
+                             : cadoc==='3044' ? (obj.operacoes||[]).length : 0
+            const totalCli   = cadoc==='3040' ? (obj.clientes||[]).length : 0
+            const totalInc   = cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.acao===1).length : 0
+            const totalExcl  = cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.acao===2).length : 0
+            const totalAtraso= cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.atraso==='S').length : 0
+            const totalContas= cadoc==='4010' ? (obj.contas||[]).length : 0
+            const saldoTotal = cadoc==='4010' ? (obj.contas||[]).reduce((a:number,c:any)=>a+(c.saldo||0),0) : 0
+            const vlrCarteira= cadoc==='3040' ? (obj.clientes||[]).flatMap((c:any)=>c.operacoes||[]).reduce((a:number,o:any)=>a+(o.VlrContr||0),0) : 0
+            const totalArq   = cadoc==='6334' ? 10 : 0
+            const totalConts = cadoc==='6334' ? (obj.contatos||[]).length : 0
+            const totalEC    = cadoc==='6334' ? (obj.conccred||[]).reduce((a:number,r:any)=>a+(r.qtdCredenciados||0),0) : 0
+
+            const fmtBRL = (v:number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0})
+
+            return (
+              <div style={{ marginBottom:12 }}>
+                {/* Header status */}
+                <div style={{ padding:'12px 16px', background: stCor+'10', border:`1px solid ${stCor}30`, borderRadius:'10px 10px 0 0', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                    <span style={{ fontSize:14, fontWeight:800, color:'#111827' }}>Dashboard — CADOC {cadoc}</span>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <span style={{ fontSize:11, color:'#dc2626', fontWeight:700, fontFamily:'monospace', padding:'2px 8px', background:'#fef2f2', borderRadius:4 }}>{erros.length} erro(s)</span>
+                      <span style={{ fontSize:11, color:'#d97706', fontWeight:700, fontFamily:'monospace', padding:'2px 8px', background:'#fffbeb', borderRadius:4 }}>{avisos.length} aviso(s)</span>
+                    </div>
                   </div>
+                  <span style={{ fontSize:12, fontWeight:800, padding:'5px 14px', borderRadius:7, background:stCor+'18', color:stCor, border:`1px solid ${stCor}40`, fontFamily:'monospace' }}>
+                    {status==='ok'?'✓ APROVADO':status==='warn'?'⚠ COM ALERTAS':'✗ REPROVADO'}
+                  </span>
                 </div>
-                <span style={{ fontSize:11, fontWeight:800, padding:'4px 12px', borderRadius:6, background: stCor+'15', color: stCor, border:`1px solid ${stCor}40`, fontFamily:'monospace' }}>
-                  {status === 'ok' ? '✓ APROVADO' : status === 'warn' ? '⚠ COM ALERTAS' : '✗ REPROVADO'}
-                </span>
-              </div>
 
-              {/* Sub-tabs */}
-              <div style={{ display:'flex', background:'#f9fafb', borderBottom:'1px solid #f3f4f6' }}>
-                {[['erros',`Críticas BCB (${erros.length+avisos.length})`],['preview','Preview Arquivo']] .map(([t,l]) => (
-                  <div key={t} onClick={() => setResTab(t as any)} style={{ flex:1, padding:'8px 4px', textAlign:'center', fontSize:10.5, fontWeight:600, color:resTab===t?'#0d6e52':'#9ca3af', cursor:'pointer', borderBottom:resTab===t?'2px solid #0d6e52':'2px solid transparent', marginBottom:-1, letterSpacing:'.4px', textTransform:'uppercase', userSelect:'none' }}>{l}</div>
-                ))}
-              </div>
+                {/* KPIs do CADOC */}
+                <div style={{ display:'grid', gridTemplateColumns:`repeat(${cadoc==='3040'?4:cadoc==='3044'?4:cadoc==='4010'?3:cadoc==='6334'?3:2},1fr)`, gap:0, border:'1px solid #e5e7eb', borderTop:'none', borderRadius:'0 0 0 0', background:'#fff' }}>
+                  {cadoc==='3040'&&[
+                    {l:'Clientes',    v:String(totalCli),            c:'#1d4ed8'},
+                    {l:'Operações',   v:String(totalOps),            c:'#7c3aed'},
+                    {l:'Carteira',    v:fmtBRL(vlrCarteira),         c:'#0d9166'},
+                    {l:'Erros BCB',   v:String(erros.length),        c:erros.length>0?'#dc2626':'#16a34a'},
+                  ].map((k,i)=>(
+                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<3?'1px solid #f3f4f6':'none', textAlign:'center' }}>
+                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
+                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
+                    </div>
+                  ))}
+                  {cadoc==='3044'&&[
+                    {l:'Total Eventos', v:String(totalOps),     c:'#7c3aed'},
+                    {l:'Inclusões (1)', v:String(totalInc),     c:'#0d9166'},
+                    {l:'Exclusões (2)', v:String(totalExcl),    c:'#d97706'},
+                    {l:'Com Atraso',    v:String(totalAtraso),  c:totalAtraso>0?'#dc2626':'#16a34a'},
+                  ].map((k,i)=>(
+                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<3?'1px solid #f3f4f6':'none', textAlign:'center' }}>
+                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
+                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
+                    </div>
+                  ))}
+                  {cadoc==='4010'&&[
+                    {l:'Contas COSIF', v:String(totalContas),     c:'#0891b2'},
+                    {l:'Saldo Total',  v:fmtBRL(saldoTotal),      c:'#0d9166'},
+                    {l:'Erros BCB',    v:String(erros.length),    c:erros.length>0?'#dc2626':'#16a34a'},
+                  ].map((k,i)=>(
+                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<2?'1px solid #f3f4f6':'none', textAlign:'center' }}>
+                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
+                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
+                    </div>
+                  ))}
+                  {cadoc==='6334'&&[
+                    {l:'Arquivos TXT', v:String(totalArq),  c:'#d97706'},
+                    {l:'ECs Ativos',   v:String(totalEC),   c:'#0891b2'},
+                    {l:'Contatos',     v:String(totalConts),c:'#0d9166'},
+                  ].map((k,i)=>(
+                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<2?'1px solid #f3f4f6':'none', textAlign:'center' }}>
+                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
+                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
+                    </div>
+                  ))}
+                  {cadoc==='3060'&&[
+                    {l:'P25', v:String(obj.percentil25||0)+'%', c:'#0891b2'},
+                    {l:'P100',v:String(obj.percentil100||0)+'%',c:'#0d9166'},
+                  ].map((k,i)=>(
+                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<1?'1px solid #f3f4f6':'none', textAlign:'center' }}>
+                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace' }}>{k.v}</div>
+                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
+                    </div>
+                  ))}
+                </div>
 
-              <div style={{ padding:'12px 14px' }}>
-                {resTab === 'erros' && (
-                  <div>
-                    {erros.length === 0 && avisos.length === 0 && (
-                      <div style={{ padding:'20px', textAlign:'center', color:'#16a34a', fontWeight:600 }}>✓ Nenhuma crítica BCB — arquivo pronto para envio ao STA!</div>
-                    )}
-                    {[...erros,...avisos].map((e,i) => (
-                      <div key={i} style={{ padding:'8px 12px', borderBottom: i<erros.length+avisos.length-1?'1px solid #f9fafb':'none', background: e.tipo==='erro'?'#fef2f2':'#fffbeb', borderLeft:`3px solid ${e.tipo==='erro'?'#dc2626':'#d97706'}`, marginBottom:2, borderRadius:4 }}>
-                        <div style={{ display:'flex', gap:8, alignItems:'flex-start' }}>
-                          <span style={{ fontFamily:'monospace', fontWeight:800, fontSize:10.5, color: e.tipo==='erro'?'#dc2626':'#d97706', minWidth:52, flexShrink:0 }}>{e.cod}</span>
-                          <div>
-                            <div style={{ fontSize:12, color:'#111827' }}>{e.msg}</div>
-                            {(e.campo||e.arquivo) && <div style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace', marginTop:2 }}>{e.arquivo}{e.arquivo&&e.campo?'.':''}{e.campo}</div>}
+                {/* Tabs: Críticas + Preview */}
+                <div style={{ display:'flex', background:'#f9fafb', border:'1px solid #e5e7eb', borderTop:'none' }}>
+                  {[['erros',`Críticas BCB (${erros.length+avisos.length})`],['preview','Preview Arquivo']].map(([t,l]) => (
+                    <div key={t} onClick={()=>setResTab(t as any)} style={{ flex:1, padding:'9px 4px', textAlign:'center', fontSize:10.5, fontWeight:600, color:resTab===t?'#0d6e52':'#9ca3af', cursor:'pointer', borderBottom:resTab===t?'2px solid #0d6e52':'2px solid transparent', marginBottom:-1, letterSpacing:'.4px', textTransform:'uppercase', userSelect:'none' }}>{l}</div>
+                  ))}
+                </div>
+
+                {/* Conteúdo das tabs */}
+                <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderTop:'none', borderRadius:'0 0 10px 10px', padding:'14px' }}>
+                  {resTab==='erros'&&(
+                    <div>
+                      {erros.length===0&&avisos.length===0 ? (
+                        <div style={{ padding:'20px', textAlign:'center', color:'#16a34a', fontWeight:700, fontSize:13 }}>✓ Nenhuma crítica BCB — arquivo pronto para envio ao STA!</div>
+                      ) : (
+                        <>
+                          {/* Tabela de críticas clicável */}
+                          <div style={{ borderRadius:8, border:'1px solid #e5e7eb', overflow:'hidden', marginBottom:10 }}>
+                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                              <thead>
+                                <tr style={{ background:'#f9fafb' }}>
+                                  {['Tipo','Código','Mensagem','Campo/Arquivo'].map(h=>(
+                                    <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontSize:9.5, fontWeight:700, color:'#9ca3af', letterSpacing:'.5px', textTransform:'uppercase', borderBottom:'1px solid #e5e7eb' }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {[...erros,...avisos].map((e,i)=>{
+                                  const iErr = e.tipo==='erro'
+                                  const ec = iErr?'#dc2626':'#d97706'
+                                  return (
+                                    <tr key={i} style={{ borderTop:i>0?'1px solid #f9fafb':'none', cursor:'pointer', background:'transparent' }}
+                                      onMouseEnter={el=>(el.currentTarget as HTMLElement).style.background=iErr?'#fef2f2':'#fffbeb'}
+                                      onMouseLeave={el=>(el.currentTarget as HTMLElement).style.background='transparent'}>
+                                      <td style={{ padding:'9px 12px' }}>
+                                        <span style={{ fontSize:9.5, fontWeight:700, padding:'2px 8px', borderRadius:4, background:ec+'15', color:ec, fontFamily:'monospace' }}>{e.tipo.toUpperCase()}</span>
+                                      </td>
+                                      <td style={{ padding:'9px 12px', fontFamily:'monospace', fontWeight:800, fontSize:11, color:ec }}>{e.cod}</td>
+                                      <td style={{ padding:'9px 12px', fontSize:12, color:'#111827' }}>{e.msg}</td>
+                                      <td style={{ padding:'9px 12px', fontSize:10.5, fontFamily:'monospace', color:'#9ca3af' }}>
+                                        {[e.arquivo,e.campo].filter(Boolean).join('.')||'—'}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
                           </div>
-                        </div>
-                      </div>
-                    ))}
-                    {(erros.length + avisos.length) > 0 && (
-                      <button onClick={exportCsvErros} style={{ marginTop:10, padding:'6px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#f9fafb', fontSize:11, fontWeight:600, cursor:'pointer', color:'#374151', outline:'none' }}>⬇ Exportar CSV de Críticas</button>
-                    )}
-                  </div>
-                )}
-
-                {resTab === 'preview' && (
-                  <pre style={{ padding:12, fontFamily:'"JetBrains Mono","Courier New",monospace', fontSize:11, color:'#94a3b8', background:'#0f172a', borderRadius:8, maxHeight:260, overflowY:'auto', margin:0, whiteSpace:'pre-wrap', wordBreak:'break-all', lineHeight:1.6 }}>
-                    {output.slice(0, 3000)}{output.length > 3000 ? '\n…' : ''}
-                  </pre>
-                )}
+                          <button onClick={exportCsvErros} style={{ padding:'6px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#f9fafb', fontSize:11, fontWeight:600, cursor:'pointer', color:'#374151', outline:'none' }}>⬇ Exportar Críticas CSV</button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {resTab==='preview'&&(
+                    <pre style={{ padding:12, fontFamily:'"JetBrains Mono","Courier New",monospace', fontSize:11, color:'#94a3b8', background:'#0f172a', borderRadius:8, maxHeight:260, overflowY:'auto', margin:0, whiteSpace:'pre-wrap', wordBreak:'break-all', lineHeight:1.6 }}>
+                      {output.slice(0,3000)}{output.length>3000?'\n…':''}
+                    </pre>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
           {/* Botões de ação */}
           <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:16 }}>
