@@ -525,151 +525,378 @@ export default function CadocsPage() {
             let obj: any = {}
             try { obj = JSON.parse(json) } catch {}
 
-            // Extrai métricas do CADOC processado
-            const totalOps   = cadoc==='3040' ? (obj.clientes||[]).reduce((a:number,c:any)=>a+(c.operacoes||[]).length,0)
-                             : cadoc==='3044' ? (obj.operacoes||[]).length : 0
+            const fmtBRL  = (v:number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:0,maximumFractionDigits:0})
+            const fmtPct  = (v:number) => v.toFixed(2).replace('.',',') + '%'
+            const fmtNum  = (v:number) => v.toLocaleString('pt-BR')
+
+            // ── Métricas 3040 ───────────────────────────────────────────────────
+            const ops3040 = cadoc==='3040'
+              ? (obj.clientes||[]).flatMap((c:any) => (c.operacoes||[]).map((o:any) => ({...o, _cli:c})))
+              : []
             const totalCli   = cadoc==='3040' ? (obj.clientes||[]).length : 0
+            const totalOps   = ops3040.length || (cadoc==='3044' ? (obj.operacoes||[]).length : 0)
+            const vlrContr   = ops3040.reduce((a:number,o:any)=>a+(o.VlrContr||0),0)
+            const vlrProv    = ops3040.reduce((a:number,o:any)=>a+(o.ProvConsttd||0),0)
+            const vlrPerda   = ops3040.reduce((a:number,o:any)=>a+(o.ContInstFinRes4966?.VlrPerdaAcum||0),0)
+
+            // Vencimentos: soma v110..v270 (a vencer), v310..v999 (vencido)
+            const VENC_COLS = ['v110','v120','v130','v140','v150','v160','v170','v180','v190','v200','v210','v220','v230','v240','v250','v260','v270']
+            const VEN_COLS  = ['v310','v320','v330','v340','v350','v360','v370','v380','v390','v400','v410']
+            const vlrAVencer  = ops3040.reduce((a:number,o:any)=>a+VENC_COLS.reduce((b:number,k:string)=>b+(o.vencimentos?.[k]||0),0),0)
+            const vlrVencido  = ops3040.reduce((a:number,o:any)=>a+VEN_COLS.reduce((b:number,k:string)=>b+(o.vencimentos?.[k]||0),0),0)
+
+            // Distribuição por Classificação (ClassOp)
+            const CLASSES = ['AA','A','B','C','D','E','F','G','H']
+            const byClass: Record<string,{qtd:number;vlr:number;prov:number}> = {}
+            CLASSES.forEach(c => { byClass[c] = {qtd:0,vlr:0,prov:0} })
+            ops3040.forEach((o:any) => {
+              const cl = o.ClassOp || 'A'
+              if (!byClass[cl]) byClass[cl] = {qtd:0,vlr:0,prov:0}
+              byClass[cl].qtd++
+              byClass[cl].vlr += o.VlrContr||0
+              byClass[cl].prov += o.ProvConsttd||0
+            })
+            const classesCom = CLASSES.filter(c => byClass[c]?.qtd > 0)
+            const maxVlrClass = Math.max(...classesCom.map(c => byClass[c].vlr), 1)
+
+            // Distribuição por Modalidade (Mod)
+            const MOD_LABELS: Record<string,string> = {
+              '0101':'Empréstimo sem consign.','0102':'Empréstimo consignado','0201':'Cheque especial',
+              '0202':'Créd. pessoal','0301':'Capital de giro','0302':'Desconto duplicatas',
+              '0401':'Financ. imobiliário','0501':'Crédito rural','1304':'Cartão crédito',
+              '0204':'Rotativo cartão','0205':'Parcelado s/ juros',
+            }
+            const byMod: Record<string,{qtd:number;vlr:number}> = {}
+            ops3040.forEach((o:any) => {
+              const m = o.Mod || 'outros'
+              if (!byMod[m]) byMod[m] = {qtd:0,vlr:0}
+              byMod[m].qtd++; byMod[m].vlr += o.VlrContr||0
+            })
+            const modsSort = Object.entries(byMod).sort((a,b)=>b[1].vlr-a[1].vlr).slice(0,6)
+            const maxVlrMod = Math.max(...modsSort.map(([,v])=>v.vlr),1)
+
+            // Vencimentos por vértice (fluxo)
+            const VERTICE_MAP: {cols:string[];label:string;color:string}[] = [
+              {cols:['v110','v120','v130'],label:'≤ 90d',    color:'#16a34a'},
+              {cols:['v140','v150','v160'],label:'91–180d',  color:'#0891b2'},
+              {cols:['v170','v180','v190'],label:'181–360d', color:'#7c3aed'},
+              {cols:['v200','v210','v220'],label:'1–2 anos', color:'#d97706'},
+              {cols:['v230','v240','v250','v260','v270'],label:'> 2 anos',color:'#6b7280'},
+            ]
+            const fluxo = VERTICE_MAP.map(v => ({
+              label: v.label,
+              color: v.color,
+              vlr: ops3040.reduce((a:number,o:any)=>a+v.cols.reduce((b:number,k:string)=>b+(o.vencimentos?.[k]||0),0),0)
+            }))
+            const maxFluxo = Math.max(...fluxo.map(f=>f.vlr),1)
+
+            // Clientes por tipo
+            const cliPF = (obj.clientes||[]).filter((c:any)=>c.Tp==='1').length
+            const cliPJ = (obj.clientes||[]).filter((c:any)=>c.Tp==='2').length
+
+            // inadimplência
+            const opsAtraso = ops3040.filter((o:any)=>(o.DiaAtraso||0)>0)
+            const vlrAtraso = opsAtraso.reduce((a:number,o:any)=>a+(o.VlrContr||0),0)
+            const pctInad   = vlrContr > 0 ? (vlrAtraso/vlrContr)*100 : 0
+
+            // outros CADOCs
+            const totalContas= cadoc==='4010' ? (obj.contas||[]).length : 0
+            const saldoTotal = cadoc==='4010' ? (obj.contas||[]).reduce((a:number,c:any)=>a+(c.saldo||0),0) : 0
             const totalInc   = cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.acao===1).length : 0
             const totalExcl  = cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.acao===2).length : 0
             const totalAtraso= cadoc==='3044' ? (obj.operacoes||[]).filter((o:any)=>o.atraso==='S').length : 0
-            const totalContas= cadoc==='4010' ? (obj.contas||[]).length : 0
-            const saldoTotal = cadoc==='4010' ? (obj.contas||[]).reduce((a:number,c:any)=>a+(c.saldo||0),0) : 0
-            const vlrCarteira= cadoc==='3040' ? (obj.clientes||[]).flatMap((c:any)=>c.operacoes||[]).reduce((a:number,o:any)=>a+(o.VlrContr||0),0) : 0
-            const totalArq   = cadoc==='6334' ? 10 : 0
-            const totalConts = cadoc==='6334' ? (obj.contatos||[]).length : 0
             const totalEC    = cadoc==='6334' ? (obj.conccred||[]).reduce((a:number,r:any)=>a+(r.qtdCredenciados||0),0) : 0
+            const totalConts = cadoc==='6334' ? (obj.contatos||[]).length : 0
 
-            const fmtBRL = (v:number) => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0})
+            const KPI = ({label,value,sub,color='#111827',mono=false}:{label:string;value:string;sub?:string;color?:string;mono?:boolean}) => (
+              <div style={{textAlign:'center',padding:'10px 6px'}}>
+                <div style={{fontSize:18,fontWeight:900,color,fontFamily:mono?'monospace':'inherit',letterSpacing:'-1px',lineHeight:1}}>{value}</div>
+                <div style={{fontSize:9.5,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.4px',marginTop:4,lineHeight:1.3}}>{label}</div>
+                {sub&&<div style={{fontSize:9,color:'#d1d5db',marginTop:2}}>{sub}</div>}
+              </div>
+            )
+            const Bar = ({pct,color,height=6}:{pct:number;color:string;height?:number}) => (
+              <div style={{height,background:'#f3f4f6',borderRadius:4,overflow:'hidden',flex:1}}>
+                <div style={{height:'100%',width:Math.min(100,pct)+'%',background:color,borderRadius:4,transition:'width .4s'}}/>
+              </div>
+            )
+            const classColor = (c:string) => {
+              if(c==='AA'||c==='A') return '#16a34a'
+              if(c==='B'||c==='C') return '#d97706'
+              if(c==='D') return '#ea580c'
+              return '#dc2626'
+            }
 
             return (
-              <div style={{ marginBottom:12 }}>
-                {/* Header status */}
-                <div style={{ padding:'12px 16px', background: stCor+'10', border:`1px solid ${stCor}30`, borderRadius:'10px 10px 0 0', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                    <span style={{ fontSize:14, fontWeight:800, color:'#111827' }}>Dashboard — CADOC {cadoc}</span>
-                    <div style={{ display:'flex', gap:8 }}>
-                      <span style={{ fontSize:11, color:'#dc2626', fontWeight:700, fontFamily:'monospace', padding:'2px 8px', background:'#fef2f2', borderRadius:4 }}>{erros.length} erro(s)</span>
-                      <span style={{ fontSize:11, color:'#d97706', fontWeight:700, fontFamily:'monospace', padding:'2px 8px', background:'#fffbeb', borderRadius:4 }}>{avisos.length} aviso(s)</span>
-                    </div>
+              <div style={{marginBottom:12}}>
+
+                {/* ── Header status ───────────────────────────────────── */}
+                <div style={{padding:'11px 16px',background:stCor+'0f',border:`1px solid ${stCor}30`,borderRadius:'10px 10px 0 0',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:12}}>
+                    <span style={{fontSize:14,fontWeight:800,color:'#111827'}}>Dashboard — CADOC {cadoc}</span>
+                    <span style={{fontSize:10,color:'#9ca3af',fontFamily:'monospace'}}>
+                      {cadoc==='3040'&&`CNPJ ${obj.cabecalho?.CNPJ||'?'} · Data-base ${obj.cabecalho?.DtBase||'?'}`}
+                      {cadoc==='3044'&&`CNPJ ${obj.cnpjIF||'?'} · Remessa ${obj.dataHoraRemessa||'?'}`}
+                      {cadoc==='4010'&&`CNPJ ${obj.cabecalho?.cnpj||'?'} · Base ${obj.cabecalho?.dataBase||'?'}`}
+                    </span>
                   </div>
-                  <span style={{ fontSize:12, fontWeight:800, padding:'5px 14px', borderRadius:7, background:stCor+'18', color:stCor, border:`1px solid ${stCor}40`, fontFamily:'monospace' }}>
-                    {status==='ok'?'✓ APROVADO':status==='warn'?'⚠ COM ALERTAS':'✗ REPROVADO'}
-                  </span>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    {erros.length>0&&<span style={{fontSize:11,color:'#dc2626',fontWeight:700,padding:'2px 8px',background:'#fef2f2',borderRadius:4,fontFamily:'monospace'}}>{erros.length} erro(s)</span>}
+                    {avisos.length>0&&<span style={{fontSize:11,color:'#d97706',fontWeight:700,padding:'2px 8px',background:'#fffbeb',borderRadius:4,fontFamily:'monospace'}}>{avisos.length} aviso(s)</span>}
+                    <span style={{fontSize:11,fontWeight:800,padding:'4px 14px',borderRadius:7,background:stCor+'18',color:stCor,border:`1px solid ${stCor}40`,fontFamily:'monospace'}}>
+                      {status==='ok'?'✓ APROVADO':status==='warn'?'⚠ COM ALERTAS':'✗ REPROVADO'}
+                    </span>
+                  </div>
                 </div>
 
-                {/* KPIs do CADOC */}
-                <div style={{ display:'grid', gridTemplateColumns:`repeat(${cadoc==='3040'?4:cadoc==='3044'?4:cadoc==='4010'?3:cadoc==='6334'?3:2},1fr)`, gap:0, border:'1px solid #e5e7eb', borderTop:'none', borderRadius:'0 0 0 0', background:'#fff' }}>
-                  {cadoc==='3040'&&[
-                    {l:'Clientes',    v:String(totalCli),            c:'#1d4ed8'},
-                    {l:'Operações',   v:String(totalOps),            c:'#7c3aed'},
-                    {l:'Carteira',    v:fmtBRL(vlrCarteira),         c:'#0d9166'},
-                    {l:'Erros BCB',   v:String(erros.length),        c:erros.length>0?'#dc2626':'#16a34a'},
-                  ].map((k,i)=>(
-                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<3?'1px solid #f3f4f6':'none', textAlign:'center' }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
-                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
-                    </div>
-                  ))}
-                  {cadoc==='3044'&&[
-                    {l:'Total Eventos', v:String(totalOps),     c:'#7c3aed'},
-                    {l:'Inclusões (1)', v:String(totalInc),     c:'#0d9166'},
-                    {l:'Exclusões (2)', v:String(totalExcl),    c:'#d97706'},
-                    {l:'Com Atraso',    v:String(totalAtraso),  c:totalAtraso>0?'#dc2626':'#16a34a'},
-                  ].map((k,i)=>(
-                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<3?'1px solid #f3f4f6':'none', textAlign:'center' }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
-                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
-                    </div>
-                  ))}
-                  {cadoc==='4010'&&[
-                    {l:'Contas COSIF', v:String(totalContas),     c:'#0891b2'},
-                    {l:'Saldo Total',  v:fmtBRL(saldoTotal),      c:'#0d9166'},
-                    {l:'Erros BCB',    v:String(erros.length),    c:erros.length>0?'#dc2626':'#16a34a'},
-                  ].map((k,i)=>(
-                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<2?'1px solid #f3f4f6':'none', textAlign:'center' }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
-                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
-                    </div>
-                  ))}
-                  {cadoc==='6334'&&[
-                    {l:'Arquivos TXT', v:String(totalArq),  c:'#d97706'},
-                    {l:'ECs Ativos',   v:String(totalEC),   c:'#0891b2'},
-                    {l:'Contatos',     v:String(totalConts),c:'#0d9166'},
-                  ].map((k,i)=>(
-                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<2?'1px solid #f3f4f6':'none', textAlign:'center' }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace', letterSpacing:'-1px' }}>{k.v}</div>
-                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
-                    </div>
-                  ))}
-                  {cadoc==='3060'&&[
-                    {l:'P25', v:String(obj.percentil25||0)+'%', c:'#0891b2'},
-                    {l:'P100',v:String(obj.percentil100||0)+'%',c:'#0d9166'},
-                  ].map((k,i)=>(
-                    <div key={k.l} style={{ padding:'14px 16px', borderRight:i<1?'1px solid #f3f4f6':'none', textAlign:'center' }}>
-                      <div style={{ fontSize:20, fontWeight:900, color:k.c, fontFamily:'monospace' }}>{k.v}</div>
-                      <div style={{ fontSize:10, color:'#9ca3af', fontWeight:600, textTransform:'uppercase', letterSpacing:'.4px', marginTop:4 }}>{k.l}</div>
-                    </div>
-                  ))}
-                </div>
+                {/* ══════════════════════════════════════════════════════
+                    DASHBOARD 3040 — Completo
+                ══════════════════════════════════════════════════════ */}
+                {cadoc==='3040'&&(
+                  <div style={{background:'#fff',border:'1px solid #e5e7eb',borderTop:'none'}}>
 
-                {/* Tabs: Críticas + Preview */}
-                <div style={{ display:'flex', background:'#f9fafb', border:'1px solid #e5e7eb', borderTop:'none' }}>
-                  {[['erros',`Críticas BCB (${erros.length+avisos.length})`],['preview','Preview Arquivo']].map(([t,l]) => (
-                    <div key={t} onClick={()=>setResTab(t as any)} style={{ flex:1, padding:'9px 4px', textAlign:'center', fontSize:10.5, fontWeight:600, color:resTab===t?'#0d6e52':'#9ca3af', cursor:'pointer', borderBottom:resTab===t?'2px solid #0d6e52':'2px solid transparent', marginBottom:-1, letterSpacing:'.4px', textTransform:'uppercase', userSelect:'none' }}>{l}</div>
-                  ))}
-                </div>
+                    {/* KPIs Linha 1 — Visão geral */}
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',borderBottom:'1px solid #f3f4f6'}}>
+                      {[
+                        {label:'Clientes',       value:fmtNum(totalCli),         color:'#1d4ed8', sub:`${cliPF} PF · ${cliPJ} PJ`},
+                        {label:'Operações',      value:fmtNum(totalOps),         color:'#7c3aed'},
+                        {label:'Valor Contratado',value:fmtBRL(vlrContr),        color:'#0d6e52'},
+                        {label:'A Vencer',        value:fmtBRL(vlrAVencer),      color:'#0891b2', sub:vlrContr>0?fmtPct(vlrAVencer/vlrContr*100):'-'},
+                        {label:'Vencido',         value:fmtBRL(vlrVencido),      color:'#d97706', sub:vlrContr>0?fmtPct(vlrVencido/vlrContr*100):'-'},
+                        {label:'Inadimplência',   value:fmtPct(pctInad),         color:pctInad>5?'#dc2626':'#16a34a', sub:`${opsAtraso.length} op(s) em atraso`},
+                        {label:'Provisão',        value:fmtBRL(vlrProv),         color:'#dc2626', sub:vlrContr>0?fmtPct(vlrProv/vlrContr*100):'-'},
+                      ].map((k,i)=>(
+                        <div key={k.label} style={{borderRight:i<6?'1px solid #f3f4f6':'none'}}>
+                          <KPI label={k.label} value={k.value} color={k.color} sub={k.sub}/>
+                        </div>
+                      ))}
+                    </div>
 
-                {/* Conteúdo das tabs */}
-                <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderTop:'none', borderRadius:'0 0 10px 10px', padding:'14px' }}>
-                  {resTab==='erros'&&(
-                    <div>
-                      {erros.length===0&&avisos.length===0 ? (
-                        <div style={{ padding:'20px', textAlign:'center', color:'#16a34a', fontWeight:700, fontSize:13 }}>✓ Nenhuma crítica BCB — arquivo pronto para envio ao STA!</div>
-                      ) : (
-                        <>
-                          {/* Tabela de críticas clicável */}
-                          <div style={{ borderRadius:8, border:'1px solid #e5e7eb', overflow:'hidden', marginBottom:10 }}>
-                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
-                              <thead>
-                                <tr style={{ background:'#f9fafb' }}>
-                                  {['Tipo','Código','Mensagem','Campo/Arquivo'].map(h=>(
-                                    <th key={h} style={{ padding:'8px 12px', textAlign:'left', fontSize:9.5, fontWeight:700, color:'#9ca3af', letterSpacing:'.5px', textTransform:'uppercase', borderBottom:'1px solid #e5e7eb' }}>{h}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {[...erros,...avisos].map((e,i)=>{
-                                  const iErr = e.tipo==='erro'
-                                  const ec = iErr?'#dc2626':'#d97706'
-                                  return (
-                                    <tr key={i} style={{ borderTop:i>0?'1px solid #f9fafb':'none', cursor:'pointer', background:'transparent' }}
-                                      onMouseEnter={el=>(el.currentTarget as HTMLElement).style.background=iErr?'#fef2f2':'#fffbeb'}
-                                      onMouseLeave={el=>(el.currentTarget as HTMLElement).style.background='transparent'}>
-                                      <td style={{ padding:'9px 12px' }}>
-                                        <span style={{ fontSize:9.5, fontWeight:700, padding:'2px 8px', borderRadius:4, background:ec+'15', color:ec, fontFamily:'monospace' }}>{e.tipo.toUpperCase()}</span>
-                                      </td>
-                                      <td style={{ padding:'9px 12px', fontFamily:'monospace', fontWeight:800, fontSize:11, color:ec }}>{e.cod}</td>
-                                      <td style={{ padding:'9px 12px', fontSize:12, color:'#111827' }}>{e.msg}</td>
-                                      <td style={{ padding:'9px 12px', fontSize:10.5, fontFamily:'monospace', color:'#9ca3af' }}>
-                                        {[e.arquivo,e.campo].filter(Boolean).join('.')||'—'}
-                                      </td>
-                                    </tr>
-                                  )
-                                })}
-                              </tbody>
-                            </table>
+                    {/* KPIs Linha 2 — Provisão e Perda */}
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',borderBottom:'1px solid #f3f4f6',background:'#fafafa'}}>
+                      {[
+                        {label:'Perda Esperada Acum.',value:fmtBRL(vlrPerda),      color:'#dc2626'},
+                        {label:'Prov./Carteira',       value:vlrContr>0?fmtPct(vlrProv/vlrContr*100):'0,00%', color:'#7c3aed'},
+                        {label:'Metodologia PE',       value:obj.cabecalho?.MetodApPE||'?', color:'#374151'},
+                        {label:'Erros Validação BCB',  value:String(erros.length),  color:erros.length>0?'#dc2626':'#16a34a'},
+                      ].map((k,i)=>(
+                        <div key={k.label} style={{borderRight:i<3?'1px solid #f3f4f6':'none'}}>
+                          <KPI label={k.label} value={k.value} color={k.color}/>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Linha 3 — Tabelas analíticas */}
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:0,borderBottom:'1px solid #f3f4f6'}}>
+
+                      {/* Classificação de Risco */}
+                      <div style={{padding:'14px 16px',borderRight:'1px solid #f3f4f6'}}>
+                        <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
+                          <div style={{width:3,height:14,background:'#7c3aed',borderRadius:2}}/>
+                          Classificação de Risco (ClassOp × ProvConsttd)
+                        </div>
+                        <div style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto auto',gap:'0 8px',alignItems:'center',rowGap:5}}>
+                          <div style={{fontSize:9,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.4px'}}>Class</div>
+                          <div style={{fontSize:9,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.4px'}}>Volume</div>
+                          <div style={{fontSize:9,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.4px',textAlign:'right'}}>Ops</div>
+                          <div style={{fontSize:9,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.4px',textAlign:'right'}}>Valor</div>
+                          <div style={{fontSize:9,fontWeight:700,color:'#9ca3af',textTransform:'uppercase',letterSpacing:'.4px',textAlign:'right'}}>Provisão</div>
+                          {classesCom.map(cl=>(
+                            <>
+                              <div key={cl+'l'} style={{fontFamily:'monospace',fontWeight:800,fontSize:11,color:classColor(cl)}}>{cl}</div>
+                              <Bar pct={byClass[cl].vlr/maxVlrClass*100} color={classColor(cl)} height={5}/>
+                              <div style={{fontSize:10,fontFamily:'monospace',color:'#374151',textAlign:'right'}}>{byClass[cl].qtd}</div>
+                              <div style={{fontSize:10,fontFamily:'monospace',color:'#374151',textAlign:'right',whiteSpace:'nowrap'}}>{fmtBRL(byClass[cl].vlr)}</div>
+                              <div style={{fontSize:10,fontFamily:'monospace',color:classColor(cl),textAlign:'right',fontWeight:600,whiteSpace:'nowrap'}}>{fmtBRL(byClass[cl].prov)}</div>
+                            </>
+                          ))}
+                          {classesCom.length===0&&<div style={{gridColumn:'1/-1',fontSize:11,color:'#9ca3af',padding:'8px 0'}}>Nenhuma operação encontrada</div>}
+                        </div>
+                      </div>
+
+                      {/* Fluxo de Vencimento por Vértice */}
+                      <div style={{padding:'14px 16px'}}>
+                        <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
+                          <div style={{width:3,height:14,background:'#0891b2',borderRadius:2}}/>
+                          Fluxo de Vencimento por Vértice (A Vencer)
+                        </div>
+                        {fluxo.filter(f=>f.vlr>0).length===0 ? (
+                          <div style={{fontSize:11,color:'#9ca3af',padding:'8px 0'}}>Nenhum vencimento mapeado nos vértices</div>
+                        ) : fluxo.map(f=>(
+                          <div key={f.label} style={{display:'grid',gridTemplateColumns:'70px 1fr 110px',gap:8,alignItems:'center',marginBottom:6}}>
+                            <span style={{fontSize:10.5,fontWeight:600,color:'#374151',whiteSpace:'nowrap'}}>{f.label}</span>
+                            <Bar pct={f.vlr/maxFluxo*100} color={f.color} height={6}/>
+                            <span style={{fontSize:10,fontFamily:'monospace',color:'#374151',textAlign:'right',whiteSpace:'nowrap'}}>{fmtBRL(f.vlr)}</span>
                           </div>
-                          <button onClick={exportCsvErros} style={{ padding:'6px 12px', borderRadius:7, border:'1px solid #e5e7eb', background:'#f9fafb', fontSize:11, fontWeight:600, cursor:'pointer', color:'#374151', outline:'none' }}>⬇ Exportar Críticas CSV</button>
-                        </>
+                        ))}
+                        <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid #f3f4f6',display:'flex',justifyContent:'space-between'}}>
+                          <span style={{fontSize:10,color:'#9ca3af'}}>Total a vencer</span>
+                          <span style={{fontSize:11,fontFamily:'monospace',fontWeight:700,color:'#0891b2'}}>{fmtBRL(vlrAVencer)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Linha 4 — Modalidade */}
+                    <div style={{padding:'14px 16px',borderBottom:'1px solid #f3f4f6'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
+                        <div style={{width:3,height:14,background:'#d97706',borderRadius:2}}/>
+                        Distribuição por Modalidade (Mod)
+                      </div>
+                      {modsSort.length===0 ? (
+                        <div style={{fontSize:11,color:'#9ca3af'}}>Nenhuma modalidade mapeada</div>
+                      ) : (
+                        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:'4px 24px'}}>
+                          {modsSort.map(([mod,v])=>(
+                            <div key={mod} style={{display:'grid',gridTemplateColumns:'38px 1fr 30px 110px',gap:6,alignItems:'center'}}>
+                              <span style={{fontSize:10,fontFamily:'monospace',fontWeight:700,color:'#0891b2'}}>{mod}</span>
+                              <Bar pct={v.vlr/maxVlrMod*100} color='#0891b2' height={5}/>
+                              <span style={{fontSize:10,fontFamily:'monospace',color:'#6b7280',textAlign:'right'}}>{v.qtd}</span>
+                              <span style={{fontSize:10,fontFamily:'monospace',color:'#374151',textAlign:'right',whiteSpace:'nowrap'}}>{fmtBRL(v.vlr)}</span>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
-                  )}
-                  {resTab==='preview'&&(
-                    <pre style={{ padding:12, fontFamily:'"JetBrains Mono","Courier New",monospace', fontSize:11, color:'#94a3b8', background:'#0f172a', borderRadius:8, maxHeight:260, overflowY:'auto', margin:0, whiteSpace:'pre-wrap', wordBreak:'break-all', lineHeight:1.6 }}>
-                      {output.slice(0,3000)}{output.length>3000?'\n…':''}
-                    </pre>
-                  )}
-                </div>
+
+                    {/* Linha 5 — Tabela de clientes/operações */}
+                    <div style={{padding:'14px 16px',borderBottom:'1px solid #f3f4f6'}}>
+                      <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:10,display:'flex',alignItems:'center',gap:6}}>
+                        <div style={{width:3,height:14,background:'#1d4ed8',borderRadius:2}}/>
+                        Clientes e Operações
+                      </div>
+                      <div style={{borderRadius:8,border:'1px solid #e5e7eb',overflow:'hidden',maxHeight:220,overflowY:'auto'}}>
+                        <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5}}>
+                          <thead style={{position:'sticky',top:0}}>
+                            <tr style={{background:'#f9fafb'}}>
+                              {['CPF/CNPJ','Tipo','Classe','Operação (IPOC)','Modalidade','Valor Contr.','Class Op','Provisão','Atraso (d)'].map(h=>(
+                                <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:9,fontWeight:700,color:'#9ca3af',letterSpacing:'.4px',textTransform:'uppercase',borderBottom:'1px solid #e5e7eb',whiteSpace:'nowrap'}}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(obj.clientes||[]).flatMap((c:any)=>(c.operacoes||[]).map((o:any,oi:number)=>({c,o,oi}))).slice(0,30).map(({c,o,oi}:any,i:number)=>(
+                              <tr key={i} style={{borderTop:i>0?'1px solid #f9fafb':'none'}}
+                                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='#f9fafb'}
+                                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:11,color:'#374151'}}>{(c.Cd||'').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/,'$1.$2.$3-$4')}</td>
+                                <td style={{padding:'6px 10px'}}><span style={{fontSize:9.5,padding:'1px 6px',borderRadius:3,background:c.Tp==='1'?'#eff6ff':'#f0fdf4',color:c.Tp==='1'?'#1d4ed8':'#16a34a',fontWeight:700}}>{c.Tp==='1'?'PF':'PJ'}</span></td>
+                                <td style={{padding:'6px 10px'}}><span style={{fontSize:10,fontWeight:700,color:classColor(c.ClassCli||'A')}}>{c.ClassCli||'—'}</span></td>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:10,color:'#6b7280',maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.IPOC||'—'}</td>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:10,color:'#0891b2'}}>{o.Mod||'—'}</td>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:11,color:'#374151',textAlign:'right',whiteSpace:'nowrap'}}>{fmtBRL(o.VlrContr||0)}</td>
+                                <td style={{padding:'6px 10px'}}><span style={{fontSize:10,fontWeight:700,color:classColor(o.ClassOp||'A')}}>{o.ClassOp||'—'}</span></td>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:11,color:'#dc2626',textAlign:'right',whiteSpace:'nowrap'}}>{fmtBRL(o.ProvConsttd||0)}</td>
+                                <td style={{padding:'6px 10px',fontFamily:'monospace',fontSize:11,color:(o.DiaAtraso||0)>0?'#dc2626':'#9ca3af',textAlign:'right'}}>{o.DiaAtraso||0}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {totalOps>30&&<div style={{padding:'6px 10px',fontSize:10,color:'#9ca3af',background:'#f9fafb',borderTop:'1px solid #f3f4f6'}}>Exibindo 30 de {totalOps} operações</div>}
+                      </div>
+                    </div>
+
+                    {/* Tabs: Críticas BCB + Preview XML */}
+                    <div>
+                      <div style={{display:'flex',background:'#f9fafb',borderBottom:'1px solid #f3f4f6'}}>
+                        {[['erros',`Críticas BCB (${erros.length+avisos.length})`],['preview','Preview XML']].map(([t,l])=>(
+                          <div key={t} onClick={()=>setResTab(t as any)} style={{flex:1,padding:'9px 4px',textAlign:'center',fontSize:10.5,fontWeight:600,color:resTab===t?'#0d6e52':'#9ca3af',cursor:'pointer',borderBottom:resTab===t?'2px solid #0d6e52':'2px solid transparent',marginBottom:-1,letterSpacing:'.4px',textTransform:'uppercase',userSelect:'none'}}>{l}</div>
+                        ))}
+                      </div>
+                      <div style={{padding:'14px',borderRadius:'0 0 10px 10px'}}>
+                        {resTab==='erros'&&(
+                          erros.length===0&&avisos.length===0 ? (
+                            <div style={{padding:'16px',textAlign:'center',color:'#16a34a',fontWeight:700,fontSize:13}}>✓ Nenhuma crítica BCB — arquivo pronto para envio ao STA!</div>
+                          ) : (
+                            <>
+                              <div style={{borderRadius:8,border:'1px solid #e5e7eb',overflow:'hidden',marginBottom:10}}>
+                                <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                                  <thead>
+                                    <tr style={{background:'#f9fafb'}}>
+                                      {['Tipo','Código','Mensagem','Campo / Localização'].map(h=>(
+                                        <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:9.5,fontWeight:700,color:'#9ca3af',letterSpacing:'.5px',textTransform:'uppercase',borderBottom:'1px solid #e5e7eb'}}>{h}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {[...erros,...avisos].map((e,i)=>{
+                                      const [er,ec]=[e.tipo==='erro','#dc2626']
+                                      const c2=er?ec:'#d97706'
+                                      return(
+                                        <tr key={i} style={{borderTop:i>0?'1px solid #f9fafb':'none'}}
+                                          onMouseEnter={el=>(el.currentTarget as HTMLElement).style.background=er?'#fef2f2':'#fffbeb'}
+                                          onMouseLeave={el=>(el.currentTarget as HTMLElement).style.background='transparent'}>
+                                          <td style={{padding:'8px 12px'}}><span style={{fontSize:9.5,fontWeight:700,padding:'2px 8px',borderRadius:4,background:c2+'15',color:c2,fontFamily:'monospace'}}>{e.tipo.toUpperCase()}</span></td>
+                                          <td style={{padding:'8px 12px',fontFamily:'monospace',fontWeight:800,fontSize:11,color:c2}}>{e.cod}</td>
+                                          <td style={{padding:'8px 12px',fontSize:12,color:'#111827'}}>{e.msg}</td>
+                                          <td style={{padding:'8px 12px',fontSize:10.5,fontFamily:'monospace',color:'#9ca3af'}}>{[e.arquivo,e.campo].filter(Boolean).join('.')||'—'}</td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <button onClick={exportCsvErros} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #e5e7eb',background:'#f9fafb',fontSize:11,fontWeight:600,cursor:'pointer',color:'#374151',outline:'none'}}>⬇ Exportar Críticas CSV</button>
+                            </>
+                          )
+                        )}
+                        {resTab==='preview'&&(
+                          <pre style={{padding:12,fontFamily:'"JetBrains Mono","Courier New",monospace',fontSize:11,color:'#94a3b8',background:'#0f172a',borderRadius:8,maxHeight:280,overflowY:'auto',margin:0,whiteSpace:'pre-wrap',wordBreak:'break-all',lineHeight:1.6}}>
+                            {output.slice(0,4000)}{output.length>4000?'\n…':''}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Outros CADOCs (dashboard simplificado) ─────────── */}
+                {cadoc!=='3040'&&(
+                  <div style={{background:'#fff',border:'1px solid #e5e7eb',borderTop:'none'}}>
+                    <div style={{display:'grid',gridTemplateColumns:`repeat(${cadoc==='3044'?4:cadoc==='4010'?3:cadoc==='6334'?3:2},1fr)`,borderBottom:'1px solid #f3f4f6'}}>
+                      {cadoc==='3044'&&[
+                        {l:'Total Eventos',v:fmtNum(totalOps),    c:'#7c3aed'},
+                        {l:'Inclusões (1)',v:fmtNum(totalInc),    c:'#0d9166'},
+                        {l:'Exclusões (2)',v:fmtNum(totalExcl),   c:'#d97706'},
+                        {l:'Com Atraso',   v:fmtNum(totalAtraso), c:totalAtraso>0?'#dc2626':'#16a34a'},
+                      ].map((k,i)=><div key={k.l} style={{borderRight:i<3?'1px solid #f3f4f6':'none'}}><KPI label={k.l} value={k.v} color={k.c} mono/></div>)}
+                      {cadoc==='4010'&&[
+                        {l:'Contas COSIF',v:fmtNum(totalContas),  c:'#0891b2'},
+                        {l:'Saldo Total', v:fmtBRL(saldoTotal),   c:'#0d9166'},
+                        {l:'Erros BCB',   v:String(erros.length), c:erros.length>0?'#dc2626':'#16a34a'},
+                      ].map((k,i)=><div key={k.l} style={{borderRight:i<2?'1px solid #f3f4f6':'none'}}><KPI label={k.l} value={k.v} color={k.c} mono/></div>)}
+                      {cadoc==='6334'&&[
+                        {l:'Arquivos TXT',v:'10',                 c:'#d97706'},
+                        {l:'ECs Credenc.',v:fmtNum(totalEC),      c:'#0891b2'},
+                        {l:'Contatos',    v:fmtNum(totalConts),   c:'#0d9166'},
+                      ].map((k,i)=><div key={k.l} style={{borderRight:i<2?'1px solid #f3f4f6':'none'}}><KPI label={k.l} value={k.v} color={k.c} mono/></div>)}
+                      {cadoc==='3060'&&[
+                        {l:'P25', v:String(obj.percentil25||0)+'%',  c:'#0891b2'},
+                        {l:'P100',v:String(obj.percentil100||0)+'%', c:'#0d9166'},
+                      ].map((k,i)=><div key={k.l} style={{borderRight:i<1?'1px solid #f3f4f6':'none'}}><KPI label={k.l} value={k.v} color={k.c} mono/></div>)}
+                    </div>
+                    <div style={{display:'flex',background:'#f9fafb',borderBottom:'1px solid #f3f4f6'}}>
+                      {[['erros',`Críticas BCB (${erros.length+avisos.length})`],['preview','Preview Arquivo']].map(([t,l])=>(
+                        <div key={t} onClick={()=>setResTab(t as any)} style={{flex:1,padding:'9px 4px',textAlign:'center',fontSize:10.5,fontWeight:600,color:resTab===t?'#0d6e52':'#9ca3af',cursor:'pointer',borderBottom:resTab===t?'2px solid #0d6e52':'2px solid transparent',marginBottom:-1,letterSpacing:'.4px',textTransform:'uppercase',userSelect:'none'}}>{l}</div>
+                      ))}
+                    </div>
+                    <div style={{padding:'14px',borderRadius:'0 0 10px 10px'}}>
+                      {resTab==='erros'&&(erros.length===0&&avisos.length===0?(
+                        <div style={{padding:'16px',textAlign:'center',color:'#16a34a',fontWeight:700}}>✓ Nenhuma crítica BCB — pronto para envio ao STA!</div>
+                      ):(
+                        <>
+                          <div style={{borderRadius:8,border:'1px solid #e5e7eb',overflow:'hidden',marginBottom:10}}>
+                            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                              <thead><tr style={{background:'#f9fafb'}}>{['Tipo','Código','Mensagem','Campo/Arquivo'].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:9.5,fontWeight:700,color:'#9ca3af',letterSpacing:'.5px',textTransform:'uppercase',borderBottom:'1px solid #e5e7eb'}}>{h}</th>)}</tr></thead>
+                              <tbody>{[...erros,...avisos].map((e,i)=>{const ec=e.tipo==='erro'?'#dc2626':'#d97706';return(<tr key={i} style={{borderTop:i>0?'1px solid #f9fafb':'none'}} onMouseEnter={el=>(el.currentTarget as HTMLElement).style.background=e.tipo==='erro'?'#fef2f2':'#fffbeb'} onMouseLeave={el=>(el.currentTarget as HTMLElement).style.background='transparent'}><td style={{padding:'8px 12px'}}><span style={{fontSize:9.5,fontWeight:700,padding:'2px 8px',borderRadius:4,background:ec+'15',color:ec,fontFamily:'monospace'}}>{e.tipo.toUpperCase()}</span></td><td style={{padding:'8px 12px',fontFamily:'monospace',fontWeight:800,fontSize:11,color:ec}}>{e.cod}</td><td style={{padding:'8px 12px',fontSize:12,color:'#111827'}}>{e.msg}</td><td style={{padding:'8px 12px',fontSize:10.5,fontFamily:'monospace',color:'#9ca3af'}}>{[e.arquivo,e.campo].filter(Boolean).join('.')||'—'}</td></tr>)})}</tbody>
+                            </table>
+                          </div>
+                          <button onClick={exportCsvErros} style={{padding:'6px 12px',borderRadius:7,border:'1px solid #e5e7eb',background:'#f9fafb',fontSize:11,fontWeight:600,cursor:'pointer',color:'#374151',outline:'none'}}>⬇ Exportar CSV</button>
+                        </>
+                      ))}
+                      {resTab==='preview'&&<pre style={{padding:12,fontFamily:'"JetBrains Mono","Courier New",monospace',fontSize:11,color:'#94a3b8',background:'#0f172a',borderRadius:8,maxHeight:260,overflowY:'auto',margin:0,whiteSpace:'pre-wrap',wordBreak:'break-all',lineHeight:1.6}}>{output.slice(0,3000)}{output.length>3000?'\n…':''}</pre>}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })()}
