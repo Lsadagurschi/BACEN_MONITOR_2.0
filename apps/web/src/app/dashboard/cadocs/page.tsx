@@ -58,113 +58,664 @@ const TEMPLATES: Record<CadocCode, object> = {
   },
 }
 
-// ─── Motor de validação ────────────────────────────────────────────────────────
+// ─── Motor de validação — regras reais SCR3040_Criticas.xls BCB ──────────────
 function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: ValErr[] } {
   const erros: ValErr[] = []
   const avisos: ValErr[] = []
-  const e = (cod: string, msg: string, campo?: string, arquivo?: string) => erros.push({ cod, tipo:'erro', msg, campo, arquivo })
-  const w = (cod: string, msg: string, campo?: string, arquivo?: string) => avisos.push({ cod, tipo:'aviso', msg, campo, arquivo })
+  const e = (cod: string, msg: string, campo?: string, loc?: string) => erros.push({ cod, tipo:'erro', msg, campo, arquivo:loc })
+  const w = (cod: string, msg: string, campo?: string, loc?: string) => avisos.push({ cod, tipo:'aviso', msg, campo, arquivo:loc })
 
   let obj: any
   try { obj = JSON.parse(json) } catch(ex: any) { e('B01', 'JSON inválido: ' + ex.message); return { erros, avisos } }
 
+  // ── CADOC 3044 ─────────────────────────────────────────────────────────────
   if (cadoc === '3044') {
-    if (!obj.cnpjIF)             e('B01', 'cnpjIF ausente')
-    else if (!/^\d{8}$/.test(String(obj.cnpjIF))) e('B01', 'cnpjIF deve ter 8 dígitos')
-    if (!obj.dataHoraRemessa)    e('B01', 'dataHoraRemessa ausente')
-    if (!obj.envia3050)          e('B01', 'envia3050 ausente (S ou N)')
+    if (!obj.cnpjIF)           e('B01', 'cnpjIF ausente — obrigatório', 'cnpjIF')
+    else if (!/^\d{8}$/.test(String(obj.cnpjIF))) e('B01', 'cnpjIF deve ter exatamente 8 dígitos numéricos', 'cnpjIF')
+    if (!obj.dataHoraRemessa)  e('B01', 'dataHoraRemessa ausente (formato: AAAA-MM-DD HH:MM:SS)', 'dataHoraRemessa')
+    if (!obj.envia3050)        e('B01', 'envia3050 ausente — deve ser "S" ou "N"', 'envia3050')
+    else if (!['S','N'].includes(obj.envia3050)) e('B01', 'envia3050 inválido — deve ser "S" ou "N"', 'envia3050')
     const ops = obj.operacoes || []
-    if (!ops.length) w('B01', 'operacoes vazio')
+    if (!ops.length) w('B17', 'operacoes vazio — arquivo não contém eventos a reportar', 'operacoes')
     const seen = new Set<string>()
     ops.forEach((op: any, i: number) => {
-      const lbl = `operacoes[${i}]`
-      if (!op.ipoc) e('B01', 'ipoc ausente', 'ipoc', lbl)
-      if (op.acao === undefined) e('B01', 'acao ausente (1=incluir, 2=excluir)', 'acao', lbl)
+      const loc = `operacoes[${i}]`
+      if (!op.ipoc)             e('B01', 'ipoc ausente — Identificador Padronizado de Operação de Crédito obrigatório', 'ipoc', loc)
+      if (op.acao === undefined || op.acao === null) e('B01', 'acao ausente — deve ser 1 (incluir) ou 2 (excluir)', 'acao', loc)
+      else if (![1,2].includes(op.acao)) e('B01', `acao inválida: ${op.acao} — deve ser 1 (incluir) ou 2 (excluir)`, 'acao', loc)
       if (op.acao === 1) {
-        if (op.saldoDevedor === undefined) e('T01', 'saldoDevedor ausente', 'saldoDevedor', lbl)
-        if (!op.dataSaldoDevedor) e('T01', 'dataSaldoDevedor ausente', 'dataSaldoDevedor', lbl)
-        if (!op.atraso) e('T01', 'atraso ausente (S ou N)', 'atraso', lbl)
-        if (op.atraso && !['S','N'].includes(op.atraso)) e('T02', 'atraso inválido — deve ser S ou N', 'atraso', lbl)
+        if (op.saldoDevedor === undefined) e('T01', 'saldoDevedor ausente — obrigatório para acao=1', 'saldoDevedor', loc)
+        else if (typeof op.saldoDevedor !== 'number') e('T01', 'saldoDevedor deve ser numérico', 'saldoDevedor', loc)
+        if (!op.dataSaldoDevedor) e('T01', 'dataSaldoDevedor ausente — formato AAAA-MM-DD', 'dataSaldoDevedor', loc)
+        else if (!/^\d{4}-\d{2}-\d{2}$/.test(op.dataSaldoDevedor)) e('F02', 'dataSaldoDevedor formato inválido — use AAAA-MM-DD', 'dataSaldoDevedor', loc)
+        if (!op.atraso)         e('T01', 'atraso ausente — deve ser "S" ou "N"', 'atraso', loc)
+        else if (!['S','N'].includes(op.atraso)) e('T02', `atraso inválido: "${op.atraso}" — deve ser "S" ou "N"`, 'atraso', loc)
       }
-      if (op.ipoc && seen.has(op.ipoc)) e('T05', 'IPOC duplicado: ' + op.ipoc, 'ipoc', lbl)
+      if (op.ipoc && seen.has(op.ipoc)) e('I14', `IPOC duplicado na remessa: ${op.ipoc}`, 'ipoc', loc)
       if (op.ipoc) seen.add(op.ipoc)
     })
+    return { erros, avisos }
   }
 
-  if (cadoc === '3040') {
-    const h = obj.cabecalho || {}
-    if (!h.CNPJ)    e('B01', 'cabecalho.CNPJ ausente')
-    if (!h.DtBase)  e('B01', 'cabecalho.DtBase ausente')
-    if (!h.MetodApPE) e('B01', 'cabecalho.MetodApPE ausente')
-    if (h.DtBase && !/^\d{4}-\d{2}-\d{2}$/.test(h.DtBase)) e('F02', 'DtBase formato inválido — use AAAA-MM-DD')
-    const clis = obj.clientes || []
-    if (!clis.length) e('B01', 'clientes vazio')
-    const cliSeen = new Set<string>()
-    clis.forEach((cli: any, ci: number) => {
-      const cl = `clientes[${ci}]`
-      if (!cli.Cd) e('B01', 'Cd (CPF/CNPJ) ausente', 'Cd', cl)
-      if (!cli.Tp) e('B01', 'Tp (tipo cliente) ausente', 'Tp', cl)
-      if (cli.Tp === '2' && cli.Cd && !/^\d{14}$/.test(cli.Cd)) e('C01', 'PJ (Tp=2): Cd deve ter 14 dígitos (CNPJ)', 'Cd', cl)
-      if (!cli.ClassCli) e('B01', 'ClassCli ausente', 'ClassCli', cl)
-      if (cli.Cd && cliSeen.has(cli.Cd)) e('I03', 'Cliente duplicado: ' + cli.Cd, 'Cd', cl)
-      if (cli.Cd) cliSeen.add(cli.Cd)
-      const opSeen = new Set<string>()
-      ;(cli.operacoes || []).forEach((op: any, oi: number) => {
-        const ol = `${cl}.operacoes[${oi}]`
-        if (!op.IPOC)    e('B01', 'IPOC ausente', 'IPOC', ol)
-        if (!op.Mod)     e('B01', 'Mod (modalidade) ausente', 'Mod', ol)
-        if (!op.ClassOp) e('B01', 'ClassOp ausente', 'ClassOp', ol)
-        if (op.TaxEft !== undefined && (op.TaxEft < 0 || op.TaxEft > 9999)) e('F01', 'TaxEft fora do intervalo (0-9999%)', 'TaxEft', ol)
-        if (op.DtContr && !/^\d{4}-\d{2}-\d{2}$/.test(op.DtContr)) e('F02', 'DtContr formato inválido — use AAAA-MM-DD', 'DtContr', ol)
-        if (op.VlrContr === undefined) e('B01', 'VlrContr ausente', 'VlrContr', ol)
-        if (!op.ContInstFinRes4966) w('C02', 'ContInstFinRes4966 ausente (exigido pela Res. 4.966)', 'ContInstFinRes4966', ol)
-        if (op.IPOC && opSeen.has(op.IPOC)) e('I04', 'Operação duplicada: IPOC ' + op.IPOC, 'IPOC', ol)
-        if (op.IPOC) opSeen.add(op.IPOC)
-        // I01 — ClassOp × ProvConsttd
-        const minPct: Record<string,number> = {AA:0,A:0.005,B:0.01,C:0.03,D:0.1,E:0.3,F:0.5,G:0.7,H:1}
-        if (op.ClassOp && op.VlrContr && op.ProvConsttd !== undefined) {
-          const mp = (minPct[op.ClassOp]||0) * op.VlrContr
-          if (op.ProvConsttd < mp * 0.99) e('I01', `ClassOp=${op.ClassOp} exige ProvConsttd ≥ ${((minPct[op.ClassOp]||0)*100).toFixed(1)}% do contrato (mín ${mp.toFixed(2)})`, 'ProvConsttd', ol)
-        }
-      })
-    })
-  }
-
+  // ── CADOC 4010 ─────────────────────────────────────────────────────────────
   if (cadoc === '4010') {
-    if (!obj.cabecalho?.cnpj)     e('B01', 'cabecalho.cnpj ausente')
-    if (!obj.cabecalho?.dataBase) e('B01', 'cabecalho.dataBase ausente')
-    if (!Array.isArray(obj.contas) || !obj.contas.length) e('B01', 'contas ausente ou vazio')
+    if (!obj.cabecalho?.cnpj)     e('B01', 'cabecalho.cnpj ausente', 'cnpj', 'cabecalho')
+    if (!obj.cabecalho?.dataBase) e('B01', 'cabecalho.dataBase ausente (formato AAAAMM)', 'dataBase', 'cabecalho')
+    else if (!/^\d{6}$/.test(String(obj.cabecalho.dataBase))) e('F02', 'cabecalho.dataBase deve ter 6 dígitos (AAAAMM)', 'dataBase', 'cabecalho')
+    if (!obj.cabecalho?.tipoRemessa) e('B01', 'cabecalho.tipoRemessa ausente ("N" = normal, "S" = substituição)', 'tipoRemessa', 'cabecalho')
+    if (!Array.isArray(obj.contas) || !obj.contas.length) e('B17', 'contas ausente ou vazio — arquivo deve conter contas COSIF', 'contas')
     ;(obj.contas || []).forEach((c: any, i: number) => {
-      if (!c.codigoConta) e('B01', 'codigoConta ausente', 'codigoConta', `contas[${i}]`)
-      if (c.saldo === undefined) e('B01', 'saldo ausente', 'saldo', `contas[${i}]`)
+      const loc = `contas[${i}]`
+      if (!c.codigoConta) e('B01', 'codigoConta ausente', 'codigoConta', loc)
+      if (c.saldo === undefined || c.saldo === null) e('B01', 'saldo ausente', 'saldo', loc)
+      else if (typeof c.saldo !== 'number') e('F01', 'saldo deve ser numérico', 'saldo', loc)
     })
+    return { erros, avisos }
   }
 
+  // ── CADOC 3060 ─────────────────────────────────────────────────────────────
   if (cadoc === '3060') {
-    if (!obj.cnpj)     e('B01', 'cnpj ausente')
-    if (!obj.dataBase) e('B01', 'dataBase ausente')
+    if (!obj.cnpj)     e('B01', 'cnpj ausente', 'cnpj')
+    if (!obj.dataBase) e('B01', 'dataBase ausente (formato AAAAMM)', 'dataBase')
     ;['percentil25','percentil50','percentil75','percentil100'].forEach(p => {
-      if (obj[p] === undefined) e('B01', p + ' ausente')
+      if (obj[p] === undefined) e('B01', `${p} ausente`, p)
+      else if (typeof obj[p] !== 'number') e('F01', `${p} deve ser numérico`, p)
     })
-    if (obj.percentil25 > obj.percentil50) e('F01', 'percentil25 > percentil50 — inválido')
-    if (obj.percentil75 > obj.percentil100) e('F01', 'percentil75 > percentil100 — inválido')
+    if (obj.percentil25 > obj.percentil50) e('F01', 'P25 > P50 — percentis devem ser crescentes', 'percentil25')
+    if (obj.percentil50 > obj.percentil75) e('F01', 'P50 > P75 — percentis devem ser crescentes', 'percentil50')
+    if (obj.percentil75 > obj.percentil100) e('F01', 'P75 > P100 — percentis devem ser crescentes', 'percentil75')
+    return { erros, avisos }
   }
 
+  // ── CADOC 6334 ─────────────────────────────────────────────────────────────
   if (cadoc === '6334') {
     const db = obj.database || {}
     if (!db.dataBase) e('B01', 'database.dataBase ausente', 'dataBase', 'DATABASE')
     if (!db.ispb)     e('B01', 'database.ispb ausente', 'ispb', 'DATABASE')
     const mes = parseInt(String(db.dataBase || '').slice(4,6) || '0')
-    if (![3,6,9,12].includes(mes)) e('VCRD0029', 'dataBase mês deve ser 03/06/09/12 (trimestral)', 'dataBase', 'DATABASE')
+    if (![3,6,9,12].includes(mes)) e('VCRD0029', `dataBase mês ${String(mes).padStart(2,'0')} inválido — CADOC 6334 é trimestral: mês deve ser 03, 06, 09 ou 12`, 'dataBase', 'DATABASE')
     const cts = obj.contatos || []
-    if (!cts.length) e('C47', 'CONTATOS vazio — obrigatório: 1 Diretor(D) + 2 Técnicos(T) + 1 E-mail institucional(I)', 'contatos', 'CONTATOS')
+    if (!cts.length) e('C47', 'CONTATOS vazio — obrigatório: 1 Diretor (D) + 2 Técnicos (T) + 1 e-mail institucional (I)', 'contatos', 'CONTATOS')
     else {
-      if (!cts.some((c:any) => c.tipo === 'D')) e('C47', 'Falta contato Diretor (tipo=D)', 'tipo', 'CONTATOS')
-      if (!cts.some((c:any) => c.tipo === 'I')) w('C47', 'Falta e-mail institucional (tipo=I)', 'tipo', 'CONTATOS')
-      if (cts.filter((c:any) => c.tipo === 'T').length < 2) w('C47', 'Menos de 2 Técnicos (tipo=T)', 'tipo', 'CONTATOS')
+      if (!cts.some((c:any) => c.tipo === 'D')) e('C47', 'Falta contato Diretor (tipo="D") — obrigatório pelo leiaute BCB', 'tipo', 'CONTATOS')
+      if (!cts.some((c:any) => c.tipo === 'I')) w('C47', 'Falta e-mail institucional (tipo="I") — recomendado pelo BCB', 'tipo', 'CONTATOS')
+      if (cts.filter((c:any) => c.tipo === 'T').length < 2) w('C47', `Apenas ${cts.filter((c:any)=>c.tipo==='T').length} técnico(s) — BCB recomenda 2 (tipo="T")`, 'tipo', 'CONTATOS')
+      cts.forEach((c:any, i:number) => {
+        if (!c.nome?.trim()) w('C47', `contatos[${i}]: nome vazio`, 'nome', 'CONTATOS')
+        if (!c.email?.trim()) w('C47', `contatos[${i}]: email vazio`, 'email', 'CONTATOS')
+      })
     }
-    if (!obj.lucrcred?.length) w('LUCRCRED', 'LUCRCRED sem registros — enviar mesmo zerado', '', 'LUCRCRED')
-    if (!obj.conccred?.length) w('B17', 'CONCCRED sem registros', '', 'CONCCRED')
+    if (!obj.lucrcred?.length) w('LUCRCRED', 'LUCRCRED sem registros — enviar mesmo zerado conforme leiaute BCB', '', 'LUCRCRED')
+    if (!obj.conccred?.length) w('B17', 'CONCCRED sem registros — arquivo deve conter credenciados', '', 'CONCCRED')
+    return { erros, avisos }
+  }
+
+  // ── CADOC 3040 — REGRAS COMPLETAS SCR3040_Criticas.xls ────────────────────
+  if (cadoc === '3040') {
+    const h = obj.cabecalho || {}
+
+    // ── Cabeçalho ─────────────────────────────────────────────────────────────
+    // B01 / B07
+    if (!h.CNPJ)    e('B01', 'cabecalho.CNPJ ausente — obrigatório (8 dígitos raiz)', 'CNPJ', 'cabecalho')
+    else if (!/^\d{8}$/.test(String(h.CNPJ))) e('B01', `CNPJ "${h.CNPJ}" inválido — deve ter 8 dígitos numéricos`, 'CNPJ', 'cabecalho')
+    if (!h.DtBase)  e('B01', 'cabecalho.DtBase ausente — formato AAAA-MM-DD', 'DtBase', 'cabecalho')
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(h.DtBase))) e('F02', 'DtBase formato inválido — use AAAA-MM-DD', 'DtBase', 'cabecalho')
+    // C47 — TotalCli obrigatório desde 2013
+    if (h.TotalCli === undefined || h.TotalCli === null || h.TotalCli === '') e('C47', 'cabecalho.TotalCli ausente — obrigatório (regra C47)', 'TotalCli', 'cabecalho')
+    if (!h.MetodApPE) e('B01', 'cabecalho.MetodApPE ausente — "S" ou "N"', 'MetodApPE', 'cabecalho')
+    else if (!['S','N'].includes(String(h.MetodApPE))) e('B01', `MetodApPE "${h.MetodApPE}" inválido — deve ser "S" ou "N"`, 'MetodApPE', 'cabecalho')
+    if (h.TpArq && !['M','P','F'].includes(String(h.TpArq))) e('B07', `TpArq "${h.TpArq}" inválido — deve ser "M" (mensal), "P" (parcial) ou "F" (final de remessa)`, 'TpArq', 'cabecalho')
+    // B17
+    const clis = obj.clientes || []
+    if (!clis.length) e('B17', 'Arquivo deve conter pelo menos um cliente <Cli> — arquivo vazio', 'clientes')
+
+    // ── Totais do cabeçalho vs real ─────────────────────────────────────────
+    if (h.TotalCli !== undefined && Number(h.TotalCli) !== clis.length) {
+      w('B01', `TotalCli=${h.TotalCli} mas há ${clis.length} clientes no arquivo — inconsistência`, 'TotalCli', 'cabecalho')
+    }
+
+    const dtBase = h.DtBase ? new Date(h.DtBase + 'T12:00:00') : null
+    const hoje   = new Date()
+
+    const cliSeen = new Map<string, number>() // Cd+Tp → índice
+    clis.forEach((cli: any, ci: number) => {
+      const loc = `clientes[${ci}] (${cli.Cd || '?'})`
+
+      // ── Campos obrigatórios do cliente ─────────────────────────────────────
+      // B01
+      if (!cli.Cd)           e('B01', 'Cd (CPF/CNPJ) ausente', 'Cd', loc)
+      if (!cli.Tp)           e('B01', 'Tp (tipo de cliente) ausente', 'Tp', loc)
+      if (!cli.IniRelactCli) e('B01', 'IniRelactCli (data de início de relacionamento) ausente — formato AAAA-MM-DD', 'IniRelactCli', loc)
+      else if (!/^\d{4}-\d{2}-\d{2}$/.test(cli.IniRelactCli)) e('F02', 'IniRelactCli formato inválido — use AAAA-MM-DD', 'IniRelactCli', loc)
+      if (!cli.Autorzc)      e('B01', 'Autorzc (autorização SCR) ausente — "S" ou "N"', 'Autorzc', loc)
+      else if (!['S','N'].includes(String(cli.Autorzc))) e('B01', `Autorzc "${cli.Autorzc}" inválido — deve ser "S" ou "N"`, 'Autorzc', loc)
+      if (!cli.ClassCli)     e('B01', 'ClassCli (classificação do cliente) ausente', 'ClassCli', loc)
+      else if (!['AA','A','B','C','D','E','F','G','H','HH'].includes(String(cli.ClassCli))) {
+        e('B01', `ClassCli "${cli.ClassCli}" inválido — valores válidos: AA, A, B, C, D, E, F, G, H, HH`, 'ClassCli', loc)
+      }
+
+      // S10 — CPF/CNPJ por tipo
+      if (cli.Tp === '1' && cli.Cd) {
+        if (!/^\d{11}$/.test(String(cli.Cd))) e('S10', `PF (Tp=1): Cd deve ter 11 dígitos (CPF). Encontrado: "${cli.Cd}"`, 'Cd', loc)
+      }
+      if (cli.Tp === '2' && cli.Cd) {
+        if (!/^\d{14}$/.test(String(cli.Cd))) e('S10', `PJ (Tp=2): Cd deve ter 14 dígitos (CNPJ). Encontrado: "${cli.Cd}"`, 'Cd', loc)
+      }
+
+      // C01 — TpCtrl obrigatório para PJ
+      if (cli.Tp === '2' && !cli.TpCtrl) e('C01', 'TpCtrl (tipo de controle) ausente — obrigatório para pessoa jurídica (C01)', 'TpCtrl', loc)
+
+      // C07/C08 — PorteCli
+      if (cli.Tp === '2' && !cli.PorteCli) w('C07', 'PorteCli ausente — obrigatório para PJ (C07)', 'PorteCli', loc)
+      if (cli.Tp === '1' && !cli.PorteCli) w('C08', 'PorteCli ausente para PF — verificar obrigatoriedade (C08)', 'PorteCli', loc)
+
+      // C31/C45 — FatAnual obrigatório
+      if (!cli.FatAnual && cli.FatAnual !== 0) w('C31', 'FatAnual (faturamento/renda mensal PF) ausente — obrigatório desde jul/2011 (C31/C45)', 'FatAnual', loc)
+
+      // I03 — cliente duplicado
+      const cliKey = `${cli.Cd}|${cli.Tp}`
+      if (cliSeen.has(cliKey)) e('I03', `Cliente duplicado na remessa: Cd="${cli.Cd}", Tp="${cli.Tp}" — já informado em clientes[${cliSeen.get(cliKey)}] (I03)`, 'Cd', loc)
+      else cliSeen.set(cliKey, ci)
+
+      // ── Operações do cliente ───────────────────────────────────────────────
+      const ops = cli.operacoes || []
+      if (!ops.length) w('B17', 'Cliente sem operações — considere remover ou verificar (B17)', 'operacoes', loc)
+
+      const ipocSeen   = new Set<string>()
+      const contrtSeen = new Map<string, number>() // Contrt+Mod → índice op
+
+      ops.forEach((op: any, oi: number) => {
+        const ol = `${loc} > op[${oi}] (${op.IPOC || op.Contrt || '?'})`
+
+        // B01 — campos obrigatórios de operação
+        if (!op.IPOC)    e('B01', 'IPOC ausente — Identificador Padronizado de Operação de Crédito obrigatório', 'IPOC', ol)
+        if (!op.Contrt)  e('B01', 'Contrt (código do contrato) ausente', 'Contrt', ol)
+        if (!op.Mod)     e('B01', 'Mod (modalidade/submodalidade) ausente — ex: "0202"', 'Mod', ol)
+        if (!op.NatuOp)  e('B01', 'NatuOp (natureza da operação) ausente — ex: "01"', 'NatuOp', ol)
+        if (!op.OrigemRec) e('B01', 'OrigemRec (origem dos recursos) ausente', 'OrigemRec', ol)
+        if (op.Indx === undefined || op.Indx === null || op.Indx === '') e('B01', 'Indx (indexador) ausente — use "3" para sem indexador', 'Indx', ol)
+        if (op.VarCamb === undefined || op.VarCamb === null || op.VarCamb === '') e('B01', 'VarCamb (variação cambial) ausente — use "0" para sem variação', 'VarCamb', ol)
+        if (!op.CEP)     e('B01', 'CEP ausente — 8 dígitos do CEP do tomador', 'CEP', ol)
+        if (!op.DtContr) e('B01', 'DtContr (data de contratação) ausente — formato AAAA-MM-DD', 'DtContr', ol)
+        if (!op.ClassOp) e('B01', 'ClassOp (classificação de risco A-H) ausente', 'ClassOp', ol)
+        if (op.VlrContr === undefined) e('B01', 'VlrContr (valor contratado) ausente', 'VlrContr', ol)
+        if (op.ProvConsttd === undefined) e('B01', 'ProvConsttd (provisão constituída) ausente', 'ProvConsttd', ol)
+        if (op.DiaAtraso === undefined) e('B01', 'DiaAtraso (dias de atraso) ausente — informar 0 se sem atraso', 'DiaAtraso', ol)
+
+        // F01 — TaxEft
+        if (op.TaxEft !== undefined) {
+          if (typeof op.TaxEft !== 'number') e('F01', 'TaxEft deve ser numérico (taxa % a.a.)', 'TaxEft', ol)
+          else if (op.TaxEft < 0 || op.TaxEft > 9999) e('F01', `TaxEft=${op.TaxEft} fora do intervalo válido (0 a 9999% a.a.) — F01`, 'TaxEft', ol)
+        } else w('B01', 'TaxEft (taxa efetiva a.a.) ausente', 'TaxEft', ol)
+
+        // F02 — Datas
+        if (op.DtContr && !/^\d{4}-\d{2}-\d{2}$/.test(String(op.DtContr))) e('F02', 'DtContr formato inválido — use AAAA-MM-DD (F02)', 'DtContr', ol)
+        if (op.DtVencOp && !/^\d{4}-\d{2}-\d{2}$/.test(String(op.DtVencOp))) e('F02', 'DtVencOp formato inválido — use AAAA-MM-DD (F02)', 'DtVencOp', ol)
+
+        // S14 — DtVencOp >= DtContr
+        if (op.DtContr && op.DtVencOp && op.DtVencOp < op.DtContr) {
+          e('S14', `DtVencOp (${op.DtVencOp}) anterior a DtContr (${op.DtContr}) — data de vencimento deve ser >= contratação (S14)`, 'DtVencOp', ol)
+        }
+
+        // S15 — DtContr <= hoje
+        if (op.DtContr && dtBase) {
+          const dtContr = new Date(op.DtContr + 'T12:00:00')
+          if (dtContr > hoje) e('S15', `DtContr (${op.DtContr}) futura — não pode ser posterior à data atual (S15)`, 'DtContr', ol)
+        }
+
+        // C11 — DtVencOp obrigatória (exceto v199)
+        const venc = op.vencimentos || {}
+        const hasV199 = venc.v199 !== undefined && venc.v199 > 0
+        if (!op.DtVencOp && !hasV199) e('C11', 'DtVencOp ausente — obrigatória exceto para operações com vencimento v199 (C11)', 'DtVencOp', ol)
+
+        // C28 — VlrContr obrigatório para modalidades não rotativas com vencimentos > v80
+        const modStr = String(op.Mod || '')
+        const isRotativo = ['0101','0210','0213','0214','0217','0406','1304'].includes(modStr) || modStr.startsWith('19')
+        const hasVenc80Plus = Object.keys(venc).some(k => {
+          const n = parseInt(k.replace('v',''))
+          return n > 80 && (venc[k] || 0) > 0
+        })
+        if (!isRotativo && hasVenc80Plus && (op.VlrContr === undefined || op.VlrContr === 0)) {
+          e('C28', `VlrContr obrigatório para modalidade ${op.Mod} não rotativa com vencimentos > v80 (C28)`, 'VlrContr', ol)
+        }
+
+        // ClassOp — validação de domínio
+        if (op.ClassOp && !['AA','A','B','C','D','E','F','G','H','HH'].includes(String(op.ClassOp))) {
+          e('B01', `ClassOp "${op.ClassOp}" inválido — valores: AA, A, B, C, D, E, F, G, H, HH`, 'ClassOp', ol)
+        }
+
+        // I01 — ClassOp × ProvConsttd × ∑VlrVenc
+        // NOTA: Regra I01 marcada como "n" (desabilitada) no XLS mas amplamente aplicada como aviso de qualidade
+        const vlrVenc = Object.entries(venc).reduce((sum: number, [k,v]: [string,any]) => {
+          const n = parseInt(k.replace('v',''))
+          // Não contar vencimentos de limite (20, 40) nem a liberar (60, 80)
+          if ([20,40,60,80].includes(n)) return sum
+          return sum + (Number(v) || 0)
+        }, 0)
+        const vlrBase = vlrVenc > 0 ? vlrVenc : (op.VlrContr || 0)
+        const minPct: Record<string,number> = {AA:0, A:0.005, B:0.01, C:0.03, D:0.1, E:0.3, F:0.5, G:0.7, H:1}
+        const maxPct: Record<string,number> = {AA:0.005, A:0.01, B:0.03, C:0.1, D:0.3, E:0.5, F:0.7, G:1, H:Infinity}
+        if (op.ClassOp && op.ProvConsttd !== undefined && vlrBase > 0 && op.ClassOp !== 'HH') {
+          const cl = String(op.ClassOp)
+          const pMin = (minPct[cl] || 0) * vlrBase
+          const pMax = (maxPct[cl] || Infinity) * vlrBase
+          const prov = Number(op.ProvConsttd) || 0
+          if (prov < pMin * 0.99) {
+            w('I01', `ClassOp=${cl} exige ProvConsttd ≥ ${((minPct[cl]||0)*100).toFixed(1)}% da carteira. Esperado ≥ R$${pMin.toFixed(2)}, informado R$${prov.toFixed(2)} (I01 — alerta de qualidade)`, 'ProvConsttd', ol)
+          } else if (pMax !== Infinity && prov >= pMax * 1.01) {
+            w('I01', `ClassOp=${cl} exige ProvConsttd < ${((maxPct[cl]||0)*100).toFixed(1)}% da carteira. Esperado < R$${pMax.toFixed(2)}, informado R$${prov.toFixed(2)} (I01)`, 'ProvConsttd', ol)
+          }
+        }
+        if (op.ClassOp === 'HH' && (op.ProvConsttd || 0) !== 0) {
+          w('I01', `ClassOp=HH (baixado como prejuízo): ProvConsttd deve ser 0, informado R$${op.ProvConsttd} (I01)`, 'ProvConsttd', ol)
+        }
+
+        // S20 — ClassOp HH e vencimentos de prejuízo (310, 320, 330)
+        const hasVencPrejuizo = (venc.v310||0) > 0 || (venc.v320||0) > 0 || (venc.v330||0) > 0
+        if (hasVencPrejuizo && op.ClassOp !== 'HH') {
+          e('S20', `Vencimentos de prejuízo (v310/v320/v330) exigem ClassOp=HH. Informado: ${op.ClassOp} (S20)`, 'ClassOp', ol)
+        }
+
+        // C33 / S28 — DiaAtraso compatível com vencimentos
+        const diaAtraso = Number(op.DiaAtraso) || 0
+        if (diaAtraso === 0) {
+          // Não pode ter vencimentos vencidos (v205+)
+          const hasVencVencido = Object.keys(venc).some(k => {
+            const n = parseInt(k.replace('v',''))
+            return n >= 205 && n <= 330 && (venc[k] || 0) > 0
+          })
+          if (hasVencVencido) e('S28', 'DiaAtraso=0 mas há vencimentos vencidos (v205 ou superior) — inconsistência (S28/C33)', 'DiaAtraso', ol)
+        } else {
+          // S29 — vencimentos de prejuízo exigem DiaAtraso mínimo
+          if ((venc.v310||0) > 0 && diaAtraso <= 180) e('S29', `v310 (prejuízo) exige DiaAtraso > 180. Informado: ${diaAtraso} (S29)`, 'DiaAtraso', ol)
+          if ((venc.v320||0) > 0 && diaAtraso <= 540) e('S29', `v320 (prejuízo) exige DiaAtraso > 540. Informado: ${diaAtraso} (S29)`, 'DiaAtraso', ol)
+          if ((venc.v330||0) > 0 && diaAtraso <= 1620) e('S29', `v330 (prejuízo) exige DiaAtraso > 1620. Informado: ${diaAtraso} (S29)`, 'DiaAtraso', ol)
+        }
+
+        // S13 — garantidor não pode ser o próprio cliente
+        ;(op.garantias || []).forEach((g: any, gi: number) => {
+          if (g.Ident && cli.Cd && String(g.Ident) === String(cli.Cd)) {
+            e('S13', `Garantidor fidejussório (Ident="${g.Ident}") igual ao cliente — autogarantia proibida (S13)`, 'Ident', `${ol} > garantias[${gi}]`)
+          }
+        })
+
+        // I04 — operação duplicada (IPOC)
+        if (op.IPOC) {
+          if (ipocSeen.has(op.IPOC)) e('I04', `IPOC duplicado para o mesmo cliente: "${op.IPOC}" (I04)`, 'IPOC', ol)
+          else ipocSeen.add(op.IPOC)
+        }
+
+        // I04b — Contrt+Mod duplicado
+        if (op.Contrt && op.Mod) {
+          const opKey = `${op.Contrt}|${op.Mod}`
+          if (contrtSeen.has(opKey)) e('I04', `Contrt+Mod duplicado: "${op.Contrt}" Mod="${op.Mod}" já informado em op[${contrtSeen.get(opKey)}] (I04)`, 'Contrt', ol)
+          else contrtSeen.set(opKey, oi)
+        }
+
+        // F03 — Código do contrato não pode ser só espaços
+        if (op.Contrt !== undefined && String(op.Contrt).trim() === '') {
+          e('F03', 'Contrt não pode ser preenchido apenas com espaços em branco (F03)', 'Contrt', ol)
+        }
+
+        // C33 — DiaAtraso obrigatório somente para operações vencidas (v205–v330)
+        const hasVencidos = Object.keys(venc).some(k => {
+          const n = parseInt(k.replace('v',''))
+          return n >= 205 && n <= 330 && (Number(venc[k])||0) > 0
+        })
+        if (hasVencidos && (op.DiaAtraso === undefined || op.DiaAtraso === null)) {
+          e('C33', 'DiaAtraso obrigatório quando há vencimentos vencidos (v205 a v330) — C33', 'DiaAtraso', ol)
+        }
+        if (!hasVencidos && (op.DiaAtraso !== undefined && Number(op.DiaAtraso) > 0)) {
+          w('C33', 'DiaAtraso > 0 mas não há vencimentos vencidos (v205+) — verifique consistência (C33)', 'DiaAtraso', ol)
+        }
+
+        // C45 — FatAnual (renda mensal PF) obrigatório para PF desde jul/2011
+        if (cli.Tp === '1' && !cli.FatAnual && cli.FatAnual !== 0) {
+          e('C45', 'FatAnual (renda mensal PF) ausente — obrigatório para Tp=1,3,5 (PF) desde jul/2011 (C45)', 'FatAnual', loc)
+        }
+
+        // S69 — Compatibilidade ClassOp × ProvConsttd conforme Res. 2682 (já coberta por I01 com bandas)
+        // Alias explícito para S69 — mesmas faixas do I01, apenas label diferente
+        if (op.ClassOp && op.ProvConsttd !== undefined && vlrBase > 0 && op.ClassOp !== 'HH') {
+          const cl69 = String(op.ClassOp)
+          const minP69: Record<string,number> = {AA:0,A:0.005,B:0.01,C:0.03,D:0.1,E:0.3,F:0.5,G:0.7,H:1}
+          const pMin69 = (minP69[cl69]||0) * vlrBase
+          const prov69 = Number(op.ProvConsttd)||0
+          if (pMin69 > 0 && prov69 < pMin69 * 0.99) {
+            w('S69', `ClassOp=${cl69}: ProvConsttd (R$${prov69.toFixed(2)}) abaixo do mínimo Res. 2682/99 — mín. ${((minP69[cl69]||0)*100).toFixed(1)}% = R$${pMin69.toFixed(2)} (S69)`, 'ProvConsttd', ol)
+          }
+        }
+
+        // S17 — Compatibilidade Tp × dígitos do Cd
+        if (cli.Tp === '1' && cli.Cd && !/^\d{11}$/.test(String(cli.Cd))) {
+          e('S17', `Tp=1 (PF): Cd deve ter 11 dígitos (CPF). Encontrado: "${cli.Cd}" (S17)`, 'Cd', ol)
+        }
+        if (cli.Tp === '2' && cli.Cd && !/^\d{14}$/.test(String(cli.Cd))) {
+          e('S17', `Tp=2 (PJ): Cd deve ter 14 dígitos (CNPJ). Encontrado: "${cli.Cd}" (S17)`, 'Cd', ol)
+        }
+
+        // S05 — Modalidade "Limite de Crédito" (19xx) só pode ter vencimentos 20 e 40
+        if (modStr.startsWith('19') && !modStr.startsWith('199')) {
+          const hasNonLimit = Object.keys(venc).some(k => {
+            const n = parseInt(k.replace('v',''))
+            return ![20,40].includes(n) && (Number(venc[k])||0) > 0
+          })
+          if (hasNonLimit) e('S05', `Modalidade ${op.Mod} (Limite de Crédito/19xx) só pode ter vencimentos v20 e v40 (S05)`, 'vencimentos', ol)
+        }
+
+        // S06 — Vencimentos v20/v40 só podem existir na modalidade 19xx
+        const hasLimitVenc = (Number(venc.v20)||0) > 0 || (Number(venc.v40)||0) > 0
+        if (hasLimitVenc && !modStr.startsWith('19')) {
+          e('S06', `v20/v40 (limite de crédito) só são válidos para modalidade 19xx. Modalidade informada: ${op.Mod} (S06)`, 'vencimentos', ol)
+        }
+
+        // S19 — Data-base mínima admissível (set/2010)
+        if (h.DtBase && h.DtBase < '2010-09-01') {
+          e('S19', `DtBase ${h.DtBase} anterior à mínima admissível (set/2010) (S19)`, 'DtBase', 'cabecalho')
+        }
+
+        // S20 (reforço) — v310/v320/v330 só para ClassOp HH + DiaAtraso mínimo (S29)
+        if ((Number(venc.v310)||0)>0 || (Number(venc.v320)||0)>0 || (Number(venc.v330)||0)>0) {
+          if (op.ClassOp !== 'HH') {
+            e('S20', `Vencimentos de prejuízo (v310/v320/v330) exigem ClassOp=HH. Informado: ${op.ClassOp} (S20)`, 'ClassOp', ol)
+          }
+        }
+
+        // S21 — Coobrigação (Mod 15xx) não pode ter v310/v320/v330
+        if (modStr.startsWith('15') && hasVencPrejuizo) {
+          e('S21', `Modalidade ${op.Mod} (coobrigação/15xx) não pode ter vencimentos de prejuízo v310/v320/v330 (S21)`, 'vencimentos', ol)
+        }
+
+        // S22 — Coobrigação Mod 1511 não pode ter PF como devedor
+        if (op.Mod === '1511' && cli.Tp === '1') {
+          e('S22', 'Modalidade 1511 (coobrigação SFN) não pode ter pessoa física (Tp=1) como devedor (S22)', 'Mod', ol)
+        }
+
+        // S23 — Natureza 04 (adquirida) não pode ter PF como devedor
+        if (String(op.NatuOp) === '04' && cli.Tp === '1') {
+          e('S23', 'NatuOp=04 (aquisição de operações) não pode ter pessoa física (Tp=1) como devedor (S23)', 'NatuOp', ol)
+        }
+
+        // S47 — Modalidades proibidas desde fev/2014
+        if (['0201','0205','0206'].includes(op.Mod)) {
+          w('S47', `Modalidade ${op.Mod} está proibida desde fev/2014 — use as submodalidades substitutivas (S47)`, 'Mod', ol)
+        }
+
+        // S50 — Crédito pessoal (0202/0203) com NatuOp 01–03 exige Tp=1,3 ou 5 (PF)
+        if (['0202','0203'].includes(op.Mod) && ['01','02','03'].includes(String(op.NatuOp))) {
+          if (!['1','3','5'].includes(String(cli.Tp))) {
+            e('S50', `Mod=${op.Mod} (crédito pessoal) com NatuOp=${op.NatuOp} exige cliente PF (Tp=1,3 ou 5). Informado Tp=${cli.Tp} (S50)`, 'Tp', ol)
+          }
+        }
+
+        // S51 — Repasse interfinanceiro (1401) exige Tp=2,4 ou 6 (PJ)
+        if (op.Mod === '1401' && !['2','4','6'].includes(String(cli.Tp))) {
+          e('S51', `Mod=1401 (repasse interfinanceiro) exige cliente PJ (Tp=2, 4 ou 6). Informado Tp=${cli.Tp} (S51)`, 'Tp', ol)
+        }
+
+        // S56 — ClassOp=HH: vencimentos só podem ser v310/v320/v330 (baixados como prejuízo)
+        if (op.ClassOp === 'HH') {
+          const hasNonPrejVenc = Object.keys(venc).some(k => {
+            const n = parseInt(k.replace('v',''))
+            return ![310,320,330].includes(n) && (Number(venc[k])||0) > 0
+          })
+          if (hasNonPrejVenc) {
+            e('S56', 'ClassOp=HH (baixado como prejuízo): vencimentos só podem ser v310, v320 ou v330 (S56)', 'vencimentos', ol)
+          }
+        }
+
+        // S69 — Compatibilidade ClassOp × ProvConsttd (estrito por Res. 2682)
+        // Já coberta por I01 acima
+
+        // S81 — IPOC: data de contratação embutida deve ser <= DtContr
+        if (op.IPOC && op.DtContr) {
+          // IPOC formato: CNPJ(8) + Tp(2) + DtContr(8 = AAAAMMDD) + seq(7) + complemento
+          const ipocStr = String(op.IPOC)
+          if (ipocStr.length >= 18) {
+            const dtIPOC = ipocStr.slice(10, 18) // posições 11-18
+            if (/^\d{8}$/.test(dtIPOC)) {
+              const dtIPOCFmt = `${dtIPOC.slice(0,4)}-${dtIPOC.slice(4,6)}-${dtIPOC.slice(6,8)}`
+              if (dtIPOCFmt > op.DtContr) {
+                w('S81', `IPOC contém data ${dtIPOCFmt} posterior a DtContr ${op.DtContr} — verifique concatenação do IPOC (S81)`, 'IPOC', ol)
+              }
+            }
+          }
+        }
+
+        // S83 — Compatibilidade Tp × Cd (reforço cruzado)
+        if (cli.Tp === '3' || cli.Tp === '4') {
+          // Tp=3 (PF exterior) e Tp=4 (PJ exterior) — Cd diferente de CPF/CNPJ padrão
+          w('S83', `Tp=${cli.Tp} (pessoa no exterior): verifique formato do Cd — dígitos de identificação internacional (S83)`, 'Cd', ol)
+        }
+
+        // S93 — Ativo Problemático: se DiaAtraso > 90, deve haver marcação
+        if (diaAtraso > 90) {
+          if (!op.CaracEsp || !String(op.CaracEsp).includes('36')) {
+            w('S93', `DiaAtraso=${diaAtraso} > 90 dias — operação deve ser marcada como Ativo Problemático (CaracEsp=36) pela Res. 4966 (S93)`, 'CaracEsp', ol)
+          }
+        }
+
+        // S97 — Se atraso > 60 dias, não pode ser Estágio 1 (IFRS9)
+        if (diaAtraso > 60 && op.ContInstFinRes4966?.EstInstFin === 1) {
+          e('S97', `DiaAtraso=${diaAtraso} > 60 dias: não pode ser classificado como Estágio 1 (EstInstFin=1) pela Res. 4966 (S97)`, 'EstInstFin', ol)
+        }
+
+        // S99 — Se há dias de atraso, deve haver valor no vértice vencido correspondente
+        if (diaAtraso > 0 && diaAtraso <= 14) {
+          if ((Number(venc.v205)||0) === 0 && (Number(venc.v210)||0) === 0) {
+            w('S99', `DiaAtraso=${diaAtraso} mas nenhum valor nos vértices de atraso (v205/v210) — verifique distribuição de vencimentos vencidos (S99)`, 'vencimentos', ol)
+          }
+        }
+
+        // S104 — ProvConsttd deve ser ≤ VlrContBr + crédito a liberar
+        if (op.ContInstFinRes4966?.VlrContBr !== undefined && op.ProvConsttd !== undefined) {
+          const vlrBr = Number(op.ContInstFinRes4966.VlrContBr) || 0
+          const vlrLib = ['v60','v80'].reduce((s:number,k:string)=>s+Number(venc[k]||0),0)
+          const prov = Number(op.ProvConsttd) || 0
+          if (prov > vlrBr + vlrLib + 0.01) {
+            e('S104', `ProvConsttd (${prov}) > VlrContBr (${vlrBr}) + crédito a liberar (${vlrLib}) — provisão não pode superar o valor de exposição (S104)`, 'ProvConsttd', ol)
+          }
+        }
+
+        // C03/C04 — Garantias: campos obrigatórios por tipo
+        ;(op.garantias || []).forEach((g: any, gi: number) => {
+          const gl = `${ol} > garantias[${gi}]`
+          const isFidej = String(g.TpGar || '') === '09'
+          if (!isFidej) {
+            // C03 — garantia não fidejussória: VlrOrig obrigatório, Ident/PercGar proibidos
+            if (g.VlrOrig === undefined) e('C03', 'Garantia não fidejussória: VlrOrig (valor original) obrigatório (C03)', 'VlrOrig', gl)
+            if (g.Ident) e('C03', 'Garantia não fidejussória: campo Ident (garantidor) é proibido (C03)', 'Ident', gl)
+            if (g.PercGar !== undefined) e('C03', 'Garantia não fidejussória: PercGar (percentual garantido) é proibido (C03)', 'PercGar', gl)
+          } else {
+            // C04 — garantia fidejussória: Ident e PercGar obrigatórios, VlrOrig proibido
+            const externas = ['0903','0904']
+            if (!externas.includes(String(g.SubTpGar||'')) && !g.Ident) {
+              e('C04', 'Garantia fidejussória: Ident (identificação do garantidor) obrigatório (C04)', 'Ident', gl)
+            }
+            if (g.PercGar === undefined) e('C04', 'Garantia fidejussória: PercGar (percentual garantido) obrigatório (C04)', 'PercGar', gl)
+            if (g.VlrOrig !== undefined) e('C04', 'Garantia fidejussória: VlrOrig (valor original) é proibido (C04)', 'VlrOrig', gl)
+          }
+          // C10 — Reavaliação de garantia: DtReav e VlrData devem vir juntos
+          if ((g.DtReav && g.VlrData === undefined) || (!g.DtReav && g.VlrData !== undefined)) {
+            e('C10', 'Reavaliação de garantia: DtReav e VlrData são obrigatórios juntos ou nenhum (C10)', 'DtReav', gl)
+          }
+        })
+
+        // I05 — Código de vencimento não pode aparecer mais de uma vez na mesma operação
+        const vencKeys = Object.keys(venc)
+        const vencSet = new Set(vencKeys)
+        if (vencKeys.length !== vencSet.size) {
+          e('I05', 'Código de vencimento duplicado na mesma operação (I05)', 'vencimentos', ol)
+        }
+
+        // I13 — Responsabilidade total do cliente >= R$ 200,00
+        // (validado no nível do cliente, não da operação — feito abaixo)
+        else {
+          const r4966 = op.ContInstFinRes4966
+          if (!r4966.ClasAtFin)   w('C02', 'ContInstFinRes4966.ClasAtFin ausente', 'ClasAtFin', ol)
+          if (!r4966.CartProvMin) w('C02', 'ContInstFinRes4966.CartProvMin ausente', 'CartProvMin', ol)
+          if (r4966.VlrContBr === undefined) w('C02', 'ContInstFinRes4966.VlrContBr ausente', 'VlrContBr', ol)
+          if (r4966.VlrPerdaAcum === undefined) w('C02', 'ContInstFinRes4966.VlrPerdaAcum ausente', 'VlrPerdaAcum', ol)
+        }
+
+        // Vencimentos — pelo menos um deve ter valor > 0 (exceto saídas)
+        const vlrTotalVenc = Object.values(venc).reduce((s: number, v: any) => s + (Number(v)||0), 0)
+        if (!hasVencPrejuizo && vlrTotalVenc === 0) {
+          w('I10', 'Nenhum vencimento com valor > 0 — operação com carteira zerada (I10 — verificar)', 'vencimentos', ol)
+        }
+      })
+
+      // I13 — Responsabilidade total do cliente < R$200 deve ir para agregado
+      const respTotal = ops.reduce((s: number, op: any) => {
+        return s + Object.entries(op.vencimentos || {}).reduce((ss: number, [k, v]: [string, any]) => {
+          const n = parseInt(k.replace('v',''))
+          return [20,40,60,80].includes(n) ? ss : ss + (Number(v)||0)
+        }, 0)
+      }, 0)
+      if (respTotal > 0 && respTotal < 200) {
+        w('I13', `Cliente ${cli.Cd}: responsabilidade total R$${respTotal.toFixed(2)} < R$200,00 — deve ser informado como agregado, não individualizado (I13)`, 'Cd', loc)
+      }
+    })
+
+    // I14 — IPOC duplicado entre clientes (cross-client)
+    const allIpocs = clis.flatMap((c: any) => (c.operacoes||[]).map((o: any) => o.IPOC)).filter(Boolean)
+    const ipocCount = allIpocs.reduce((m: Record<string,number>, ip: string) => { m[ip]=(m[ip]||0)+1; return m }, {})
+    Object.entries(ipocCount).forEach(([ip, cnt]) => {
+      if ((cnt as number) > 1) e('I14', `IPOC "${ip}" aparece ${cnt} vezes na remessa — não é admitida repetição (I14)`, 'IPOC', 'remessa')
+    })
+
+    // ── REGRAS DE BATIMENTO COSIF (SCR3040_RegrasValidacaoBacen_1.xls) ──────────
+    // Estas regras comparam os totais do CADOC 3040 com o CADOC 4010 (Balancete COSIF).
+    // Como são inter-documentos, validamos internamente a consistência e alertamos
+    // sobre os totalizadores que o BCB irá conferir automaticamente no servidor.
+
+    const allOps = clis.flatMap((c: any) => (c.operacoes||[]).map((o: any) => ({...o, _cli:c})))
+    const NATOPS_PROP = ['01','02','03','11','13','14','15'] // naturezas aceitas nos batimentos
+    const VENC_ATIVOS  = (venc:any) => Object.entries(venc||{}).some(([k,v]) => { const n=parseInt(k.replace('v','')); return n>=110 && n<=290 && (Number(v)||0)>0 })
+    const VENC_PREJ    = (venc:any) => ['v310','v320','v330'].some(k => (Number((venc||{})[k])||0)>0)
+
+    // T01 — Total SCR × Classificação da Carteira no COSIF (rubrica 3.1.0.00.00-0)
+    const totalSCRCarteira = allOps
+      .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')) && VENC_ATIVOS(o.vencimentos) && !VENC_PREJ(o.vencimentos))
+      .reduce((s:number,o:any)=>s+Object.entries(o.vencimentos||{}).reduce((ss:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)? ss+Number(v):ss},0),0)
+    if (totalSCRCarteira === 0 && allOps.length > 0) {
+      w('T01','Soma dos vencimentos (v110–v290) com ClassOp AA–H é zero — verifique batimento com COSIF 3.1.0.00.00-0 (T01)', 'vencimentos', 'batimento')
+    }
+
+    // T05 — Total baixados como prejuízo (ClassOp=HH) × COSIF 9.0.9.60.10/15/20
+    const totalHH = allOps
+      .filter((o:any) => o.ClassOp === 'HH')
+      .reduce((s:number,o:any)=>s+(Number(o.vencimentos?.v310)||0)+(Number(o.vencimentos?.v320)||0)+(Number(o.vencimentos?.v330)||0),0)
+    if (totalHH > 0) {
+      w('T05', `∑ ClassOp=HH (v310+v320+v330) = R$${totalHH.toLocaleString('pt-BR')} — deve bater com COSIF 9.0.9.60.10-5 + 9.0.9.60.15-0 + 9.0.9.60.20-8 do CADOC 4010 (T05)`, 'ClassOp', 'batimento')
+    }
+
+    // T07 — Arrendamento Mercantil (Mod 12xx) × COSIF 3.1.x.20.00
+    const totalArrend = allOps
+      .filter((o:any) => String(o.Mod||'').startsWith('12') && VENC_ATIVOS(o.vencimentos))
+      .reduce((s:number,o:any)=>s+Object.entries(o.vencimentos||{}).reduce((ss:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?ss+Number(v):ss},0),0)
+    if (totalArrend > 0) {
+      w('T07', `Arrendamento Mercantil (Mod 12xx): ∑venc = R$${totalArrend.toLocaleString('pt-BR')} — deve bater com rubricas COSIF 3.1.x.20.00 deduzido de 1.8.8.78.15/16 do CADOC 4010 (T07)`, 'Mod', 'batimento')
+    }
+
+    // M02/M03 — Empréstimos e Títulos Descontados (atualmente "não" no XLS mas relevantes)
+    const modBatMap: Record<string,{label:string;cosif:string}> = {
+      '02': {label:'Empréstimos',              cosif:'1.6.1.20.00-8'},
+      '03': {label:'Títulos Descontados',       cosif:'1.6.1.30.00-5'},
+      '15': {label:'Coobrigações (exceto 1505)',cosif:'3.0.1.30.00-5 + 3.0.1.85.00-5 + 3.0.1.90.00-7'},
+      '16': {label:'Cedidos s/ coobrigação',    cosif:'3.0.9.58.00-5'},
+    }
+    Object.entries(modBatMap).forEach(([modPrefix, info]) => {
+      const vlrMod = allOps
+        .filter((o:any) => {
+          const m = String(o.Mod||'')
+          if (modPrefix === '15') return m.startsWith('15') && m !== '1505'
+          return m.startsWith(modPrefix)
+        })
+        .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')) && VENC_ATIVOS(o.vencimentos))
+        .reduce((s:number,o:any)=>s+Object.entries(o.vencimentos||{}).reduce((ss:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?ss+Number(v):ss},0),0)
+      if (vlrMod > 0) {
+        const ruleCode = modPrefix === '02' ? 'M02' : modPrefix === '03' ? 'M03' : modPrefix === '15' ? 'M15' : 'M16'
+        w(ruleCode, `${info.label}: ∑venc (v110–v290) = R$${vlrMod.toLocaleString('pt-BR')} — conferir batimento com COSIF ${info.cosif} do CADOC 4010 (${ruleCode})`, 'Mod', 'batimento')
+      }
+    })
+    const totalV310 = allOps.reduce((s:number,o:any)=>s+Number(o.vencimentos?.v310||0),0)
+    const totalV320 = allOps.reduce((s:number,o:any)=>s+Number(o.vencimentos?.v320||0),0)
+    const totalV330 = allOps.reduce((s:number,o:any)=>s+Number(o.vencimentos?.v330||0),0)
+    if (totalV310 > 0) w('T02', `∑v310 (baixados ≤12m) = R$${totalV310.toLocaleString('pt-BR')} — deve ser igual à rubrica COSIF 9.0.9.60.10-5 do CADOC 4010 (T02 — batimento inter-documentos)`, 'v310', 'batimento')
+    if (totalV320 > 0) w('T03', `∑v320 (baixados 12–48m) = R$${totalV320.toLocaleString('pt-BR')} — deve ser igual à rubrica COSIF 9.0.9.60.15-0 do CADOC 4010 (T03)`, 'v320', 'batimento')
+    if (totalV330 > 0) w('T04', `∑v330 (baixados >48m) = R$${totalV330.toLocaleString('pt-BR')} — deve ser igual à rubrica COSIF 9.0.9.60.20-8 do CADOC 4010 (T04)`, 'v330', 'batimento')
+
+    // T06 — Crédito a Liberar (v20/v40/v60/v80) × COSIF 3.0.9.80.00-4 + 3.0.9.86.00-8
+    const totalCreditoLiberar = allOps.reduce((s:number,o:any)=>s+['v20','v40','v60','v80'].reduce((ss:number,k:string)=>ss+Number(o.vencimentos?.[k]||0),0),0)
+    if (totalCreditoLiberar > 0) w('T06', `∑v20+v40+v60+v80 (crédito a liberar/limites) = R$${totalCreditoLiberar.toLocaleString('pt-BR')} — deve bater com COSIF 3.0.9.80.00-4 + 3.0.9.86.00-8 (T06)`, 'vencimentos', 'batimento')
+
+    // R01–R09 — Batimento por Nível de Risco × Rubricas COSIF 3.1.1–3.1.9
+    const COSIF_RISCO: Record<string,string> = {AA:'3.1.1.00.00-3',A:'3.1.2.00.00-6',B:'3.1.3.00.00-9',C:'3.1.4.00.00-2',D:'3.1.5.00.00-5',E:'3.1.6.00.00-8',F:'3.1.7.00.00-1',G:'3.1.8.00.00-4',H:'3.1.9.00.00-7'}
+    const RN: Record<string,number> = {}
+    ;['AA','A','B','C','D','E','F','G','H'].forEach(cl => { RN[cl] = 0 })
+    allOps
+      .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')) && VENC_ATIVOS(o.vencimentos))
+      .forEach((o:any) => {
+        const cl = String(o.ClassOp||'')
+        if (RN[cl] !== undefined) {
+          RN[cl] += Object.entries(o.vencimentos||{}).reduce((s:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?s+Number(v):s},0)
+        }
+      })
+    Object.entries(RN).forEach(([cl, vlr]) => {
+      if (vlr > 0 && COSIF_RISCO[cl]) {
+        w(`R${Object.keys(COSIF_RISCO).indexOf(cl)+1<10?'0':''}${Object.keys(COSIF_RISCO).indexOf(cl)+1}`,
+          `Classe ${cl}: ∑venc (v110–v290) = R$${vlr.toLocaleString('pt-BR')} — deve bater com COSIF ${COSIF_RISCO[cl]} do CADOC 4010 (R0${Object.keys(COSIF_RISCO).indexOf(cl)+1})`,
+          'ClassOp', 'batimento')
+      }
+    })
+
+    // M01–M24 — Batimento por Modalidade × Rubricas COSIF (ativos = sim)
+    const MOD_COSIF_ATIVO: Record<string,string> = {
+      '01':'1.6.1.10.00-1','04':'1.6.2.10.00-4','05':'1.6.2.20.00-1','06':'1.6.2.25.00-6',
+      '07':'1.6.2.30.00-8','08':'1.6.3.00.00-0','09':'1.6.4.00.00-3','10':'1.6.5.00.00-6',
+      '11':'1.6.6.00.00-9','1304':'1.8.8.79.00-3','1301':'1.8.1.10.10.10-9','14':'1.4.3.00.00-2',
+    }
+    const byMod3040: Record<string,number> = {}
+    allOps
+      .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')) && VENC_ATIVOS(o.vencimentos))
+      .forEach((o:any) => {
+        const m = String(o.Mod||'')
+        if (!byMod3040[m]) byMod3040[m] = 0
+        byMod3040[m] += Object.entries(o.vencimentos||{}).reduce((s:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?s+Number(v):s},0)
+      })
+    Object.entries(byMod3040).forEach(([mod, vlr]) => {
+      const cosif = MOD_COSIF_ATIVO[mod] || MOD_COSIF_ATIVO[mod.slice(0,2)]
+      if (cosif && vlr > 0) {
+        w('MV', `Modalidade ${mod}: ∑venc (v110–v290) = R$${vlr.toLocaleString('pt-BR')} — deve bater com rubrica COSIF ${cosif} do CADOC 4010 (Regra MV)`, 'Mod', 'batimento')
+      }
+    })
+
+    // P (Provisão por Modalidade) — totais de ProvConsttd por Mod × COSIF
+    const PROV_COSIF: Record<string,string> = {
+      '01':'1.6.1.10.01.40-4','02':'1.6.1.20.01.40-3','03':'1.6.1.30.01.40-2',
+      '04':'1.6.2.10.01.40-1','05':'1.6.2.20.01.40-0','06':'1.6.2.25.01.40-5',
+      '08':'1.6.3.05.01.40-4','09':'1.6.4.10.01.40-5','11':'1.6.6.10.01.40-9',
+      '1304':'1.8.9.96.00.00-5','1301':'1.8.1.10.10.40-8',
+    }
+    const provByMod: Record<string,number> = {}
+    allOps
+      .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')))
+      .forEach((o:any) => {
+        const m = String(o.Mod||'')
+        if (!provByMod[m]) provByMod[m] = 0
+        provByMod[m] += Number(o.ProvConsttd || 0)
+      })
+    const totalProv = Object.values(provByMod).reduce((s:number,v:number)=>s+v,0)
+    if (totalProv > 0) {
+      w('P', `Provisão total SCR = R$${totalProv.toLocaleString('pt-BR')} — deve bater com soma das rubricas COSIF P01–P13 do CADOC 4010 (RegrasValidacaoBacen Planilha P)`, 'ProvConsttd', 'batimento')
+    }
+
+    // MB (Valor Contábil Bruto por Modalidade) — ContInstFinRes4966.VlrContBr por Mod × COSIF
+    const vlrBrutoTotal = allOps.reduce((s:number,o:any)=>s+Number(o.ContInstFinRes4966?.VlrContBr||0),0)
+    if (vlrBrutoTotal > 0) {
+      w('MB', `VlrContBr total (Res.4966) = R$${vlrBrutoTotal.toLocaleString('pt-BR')} — deve ser ≤ rubricas COSIF MB01–MB15 do CADOC 4010 (RegrasValidacaoBacen Planilha MB)`, 'VlrContBr', 'batimento')
+    }
   }
 
   return { erros, avisos }
@@ -504,6 +1055,22 @@ export default function CadocsPage() {
                 <span style={{ fontSize:12.5, fontWeight:600, color:'#111827' }}>Entrada — CADOC {cadoc}</span>
               </div>
               <div style={{ display:'flex', gap:6 }}>
+                {/* Upload JSON externo */}
+                <label style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:`1px solid ${meta.cor}50`, background:`${meta.cor}10`, cursor:'pointer', color:meta.cor, fontWeight:700, outline:'none', display:'inline-flex', alignItems:'center', gap:4 }}>
+                  ⬆ Importar JSON
+                  <input type="file" accept=".json,.xml,.txt" style={{ display:'none' }} onChange={e => {
+                    const file = e.target.files?.[0]; if (!file) return
+                    const reader = new FileReader()
+                    reader.onload = ev => {
+                      const text = ev.target?.result as string
+                      // Tenta parsear direto; se for XML, avisa
+                      try { JSON.parse(text); onJsonChange(text) }
+                      catch { setJsonErr('Arquivo não é um JSON válido. Para XML, use o template e preencha os dados.') }
+                    }
+                    reader.readAsText(file, 'UTF-8')
+                    e.target.value = '' // reset so same file can be selected again
+                  }}/>
+                </label>
                 <button onClick={() => { const t = JSON.stringify(TEMPLATES[cadoc],null,2); setJson(t); onJsonChange(t) }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>↺ Template</button>
                 <button onClick={() => { setJson(''); setLvState('idle'); setLvMsg('Aguardando JSON…') }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>✕ Limpar</button>
               </div>
