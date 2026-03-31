@@ -1205,8 +1205,9 @@ export default function CadocsPage() {
                   <input type="file" accept=".json" style={{ display:'none' }} onChange={ev => {
                     const file = ev.target.files?.[0]; if (!file) return
                     const reader = new FileReader()
-                    reader.onload = e => {
-                      const text = ev.target?.result as string ?? (e.target?.result as string)
+                    reader.onload = (e: ProgressEvent<FileReader>) => {
+                      const text = e.target?.result as string
+                      if (!text) return
                       try {
                         JSON.parse(text)
                         setImportMode('json')
@@ -1228,8 +1229,9 @@ export default function CadocsPage() {
                     <input type="file" accept=".xml,.XML" style={{ display:'none' }} onChange={ev => {
                       const file = ev.target.files?.[0]; if (!file) return
                       const reader = new FileReader()
-                      reader.onload = e => {
+                      reader.onload = (e: ProgressEvent<FileReader>) => {
                         const text = e.target?.result as string
+                        if (!text) return
                         const { ok, obj, erroMsg } = parseXmlParaCadoc(text, cadoc)
                         if (!ok) {
                           setJsonErr(`❌ Falha ao interpretar XML: ${erroMsg}`)
