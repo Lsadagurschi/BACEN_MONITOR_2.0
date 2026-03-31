@@ -809,6 +809,138 @@ function gerar(cadoc: CadocCode, obj: any): string {
   return ''
 }
 
+// ─── Parser XML → JSON interno (para importação de arquivo XML do BCB) ────────
+function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; obj: any; erroMsg?: string } {
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(xmlText, 'application/xml')
+    const parseErr = doc.querySelector('parsererror')
+    if (parseErr) return { ok:false, obj:null, erroMsg: 'XML malformado: ' + parseErr.textContent?.slice(0,120) }
+
+    const attr = (el: Element|null, name: string) => el?.getAttribute(name) ?? undefined
+    const num  = (v: string|undefined) => v !== undefined && v !== '' ? parseFloat(v) : undefined
+    const int  = (v: string|undefined) => v !== undefined && v !== '' ? parseInt(v)   : undefined
+
+    // ── CADOC 3040 ─────────────────────────────────────────────────────────────
+    if (cadoc === '3040') {
+      const root = doc.documentElement
+      if (!root || (root.tagName !== 'Doc3040' && root.tagName !== 'doc3040')) {
+        return { ok:false, obj:null, erroMsg:`Elemento raiz esperado: <Doc3040>, encontrado: <${root?.tagName}>` }
+      }
+
+      const cabecalho: any = {
+        CNPJ:       attr(root,'CNPJ'),
+        DtBase:     attr(root,'DtBase'),
+        Parte:      attr(root,'Parte'),
+        Remessa:    attr(root,'Remessa'),
+        TpArq:      attr(root,'TpArq'),
+        NomeResp:   attr(root,'NomeResp'),
+        EmailResp:  attr(root,'EmailResp'),
+        TelResp:    attr(root,'TelResp'),
+        TotalCli:   int(attr(root,'TotalCli')),
+        MetodApPE:  attr(root,'MetodApPE'),
+        MetodDifTJE:attr(root,'MetodDifTJE'),
+      }
+
+      const clientes: any[] = []
+      root.querySelectorAll(':scope > Cli').forEach(cli => {
+        const operacoes: any[] = []
+        cli.querySelectorAll(':scope > Op').forEach(op => {
+          const vencEl = op.querySelector(':scope > Venc')
+          const vencimentos: any = {}
+          if (vencEl) {
+            vencEl.getAttributeNames().forEach(name => {
+              const v = vencEl.getAttribute(name)
+              if (v !== null && v !== '') vencimentos[name] = parseFloat(v)
+            })
+          }
+
+          const r4966El = op.querySelector(':scope > ContInstFinRes4966')
+          const r4966 = r4966El ? {
+            ClasAtFin:   attr(r4966El,'ClasAtFin'),
+            CartProvMin: attr(r4966El,'CartProvMin'),
+            VlrContBr:   num(attr(r4966El,'VlrContBr')),
+            VlrPerdaAcum:num(attr(r4966El,'VlrPerdaAcum')),
+            EstInstFin:  int(attr(r4966El,'EstInstFin')),
+          } : undefined
+
+          const opObj: any = {
+            IPOC:       attr(op,'IPOC'),
+            Contrt:     attr(op,'Contrt'),
+            Mod:        attr(op,'Mod'),
+            NatuOp:     attr(op,'NatuOp'),
+            OrigemRec:  attr(op,'OrigemRec'),
+            Indx:       attr(op,'Indx'),
+            VarCamb:    attr(op,'VarCamb'),
+            CEP:        attr(op,'CEP'),
+            TaxEft:     num(attr(op,'TaxEft')),
+            DtContr:    attr(op,'DtContr'),
+            DtVencOp:   attr(op,'DtVencOp'),
+            VlrContr:   num(attr(op,'VlrContr')),
+            ClassOp:    attr(op,'ClassOp'),
+            ProvConsttd:num(attr(op,'ProvConsttd')),
+            DiaAtraso:  int(attr(op,'DiaAtraso')),
+          }
+          if (Object.keys(vencimentos).length > 0) opObj.vencimentos = vencimentos
+          if (r4966) opObj.ContInstFinRes4966 = r4966
+          operacoes.push(opObj)
+        })
+
+        clientes.push({
+          Cd:          attr(cli,'Cd'),
+          Tp:          attr(cli,'Tp'),
+          IniRelactCli:attr(cli,'IniRelactCli'),
+          Autorzc:     attr(cli,'Autorzc'),
+          ClassCli:    attr(cli,'ClassCli'),
+          TpCtrl:      attr(cli,'TpCtrl'),
+          PorteCli:    attr(cli,'PorteCli'),
+          FatAnual:    num(attr(cli,'FatAnual')),
+          operacoes,
+        })
+      })
+
+      return { ok:true, obj:{ cabecalho, clientes } }
+    }
+
+    // ── CADOC 4010 ─────────────────────────────────────────────────────────────
+    if (cadoc === '4010') {
+      const root = doc.documentElement
+      const cabecalho = {
+        codigoDocumento: attr(root,'codigoDocumento') || '4010',
+        cnpj:            attr(root,'cnpj'),
+        dataBase:        attr(root,'dataBase'),
+        tipoRemessa:     attr(root,'tipoRemessa') || 'N',
+      }
+      const contas: any[] = []
+      root.querySelectorAll('conta').forEach(c => {
+        contas.push({ codigoConta: attr(c,'codigoConta'), saldo: num(attr(c,'saldo')) })
+      })
+      return { ok:true, obj:{ cabecalho, contas } }
+    }
+
+    // ── CADOC 3060 ─────────────────────────────────────────────────────────────
+    if (cadoc === '3060') {
+      const root = doc.documentElement
+      return { ok:true, obj:{
+        dataBase:     attr(root,'dataBase') || root.querySelector('dataBase')?.textContent,
+        codigoDocumento: '3060',
+        cnpj:         attr(root,'cnpj') || root.querySelector('cnpj')?.textContent,
+        tipoEnvio:    attr(root,'tipoEnvio') || 'I',
+        percentil25:  num(root.querySelector('percentil25')?.textContent || undefined),
+        percentil50:  num(root.querySelector('percentil50')?.textContent || undefined),
+        percentil75:  num(root.querySelector('percentil75')?.textContent || undefined),
+        percentil100: num(root.querySelector('percentil100')?.textContent || undefined),
+      }}
+    }
+
+    // Outros CADOCs — não têm formato XML esperado nesta versão
+    return { ok:false, obj:null, erroMsg:`CADOC ${cadoc} não suporta importação XML. Use importação JSON.` }
+
+  } catch(ex: any) {
+    return { ok:false, obj:null, erroMsg: 'Erro ao processar XML: ' + ex.message }
+  }
+}
+
 // ─── Metadados dos CADOCs ──────────────────────────────────────────────────────
 const CADOCS_META: Record<CadocCode, { nome:string; per:string; quem:string; arq:string; cor:string; desc:string }> = {
   '3044': { nome:'SCR — Eventos de Crédito',           per:'Por evento · D+5 úteis', quem:'IFs com carteira de crédito', arq:'JSON via STA', cor:'#7c3aed', desc:'CADOC 3044 — IN BCB 530/2025. Reporte quase em tempo real de eventos que alteram saldo devedor. Vigente desde nov/2025.' },
@@ -856,6 +988,7 @@ export default function CadocsPage() {
   const [jsonErr, setJsonErr] = useState('')
   const [nomeIF, setNomeIF]   = useState('')
   const [cnpjIF, setCnpjIF]   = useState('')
+  const [importMode, setImportMode] = useState<'json'|'xml'>('json')
   const lvTimer = useRef<ReturnType<typeof setTimeout>|null>(null)
 
   // Carrega dados da IF das Configurações e pré-preenche o template
@@ -893,11 +1026,12 @@ export default function CadocsPage() {
 
   const selectCadoc = (c: CadocCode) => {
     setCadoc(c); setStep(1); setOutput(""); setJsonErr(""); setErros([]); setAvisos([]); setStatus(null)
+    setImportMode('json')
     const cnpj = typeof window !== "undefined" ? (localStorage.getItem("bm_cnpj")||"") : ""
     const ispb = typeof window !== "undefined" ? (localStorage.getItem("bm_ispb")||cnpj) : cnpj
     const tmpl = cnpj ? applyIFData(TEMPLATES[c], c, cnpj, ispb) : TEMPLATES[c]
     setJson(JSON.stringify(tmpl, null, 2))
-    setLvState("idle"); setLvMsg("Aguardando JSONu2026")
+    setLvState("idle"); setLvMsg("Aguardando JSON…")
   }
 
   const gerar_e_validar = async () => {
@@ -966,9 +1100,9 @@ export default function CadocsPage() {
   const lvCor = lvState === 'ok' ? '#16a34a' : lvState === 'warn' ? '#d97706' : lvState === 'err' ? '#dc2626' : '#9ca3af'
 
   const STEPS = [
-    { n:1, l:'Dados JSON',        d:'Edite ou cole seu JSON' },
+    { n:1, l:'Dados',              d:'JSON ou XML do BCB'    },
     { n:2, l:'Geração & Validação', d:'Regras BCB aplicadas'  },
-    { n:3, l:'Resultado',          d:'Erros, avisos, preview'  },
+    { n:3, l:'Resultado',          d:'Erros, avisos, preview' },
     { n:4, l:'Exportação',         d:'Download + auditoria'   },
   ]
 
@@ -1047,36 +1181,98 @@ export default function CadocsPage() {
         {/* Conteúdo scrollável */}
         <div style={{ flex:1, overflowY:'auto', padding:'14px 16px' }}>
 
-          {/* Editor JSON */}
+          {/* Editor JSON / XML */}
           <div style={{ background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, overflow:'hidden', marginBottom:12 }}>
             <div style={{ padding:'9px 14px', background:'#f9fafb', borderBottom:'1px solid #f3f4f6', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:6 }}>
               <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                <span style={{ fontSize:9.5, fontFamily:'monospace', fontWeight:700, background: meta.cor, color:'#fff', padding:'2px 8px', borderRadius:4 }}>JSON</span>
-                <span style={{ fontSize:12.5, fontWeight:600, color:'#111827' }}>Entrada — CADOC {cadoc}</span>
+                <span style={{ fontSize:9.5, fontFamily:'monospace', fontWeight:700, background: meta.cor, color:'#fff', padding:'2px 8px', borderRadius:4 }}>
+                  {importMode === 'xml' ? 'XML importado' : 'JSON'}
+                </span>
+                <span style={{ fontSize:12.5, fontWeight:600, color:'#111827' }}>
+                  {importMode === 'xml' ? `XML → JSON — CADOC ${cadoc}` : `Entrada — CADOC ${cadoc}`}
+                </span>
+                {importMode === 'xml' && (
+                  <span style={{ fontSize:10, color:'#16a34a', background:'#f0fdf4', border:'1px solid #bbf7d0', padding:'1px 8px', borderRadius:4, fontWeight:600 }}>
+                    ✓ XML convertido para JSON
+                  </span>
+                )}
               </div>
               <div style={{ display:'flex', gap:6 }}>
-                {/* Upload JSON externo */}
+
+                {/* ── Importar JSON ── */}
                 <label style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:`1px solid ${meta.cor}50`, background:`${meta.cor}10`, cursor:'pointer', color:meta.cor, fontWeight:700, outline:'none', display:'inline-flex', alignItems:'center', gap:4 }}>
-                  ⬆ Importar JSON
-                  <input type="file" accept=".json,.xml,.txt" style={{ display:'none' }} onChange={e => {
-                    const file = e.target.files?.[0]; if (!file) return
+                  ⬆ JSON
+                  <input type="file" accept=".json" style={{ display:'none' }} onChange={ev => {
+                    const file = ev.target.files?.[0]; if (!file) return
                     const reader = new FileReader()
-                    reader.onload = ev => {
-                      const text = ev.target?.result as string
-                      // Tenta parsear direto; se for XML, avisa
-                      try { JSON.parse(text); onJsonChange(text) }
-                      catch { setJsonErr('Arquivo não é um JSON válido. Para XML, use o template e preencha os dados.') }
+                    reader.onload = e => {
+                      const text = ev.target?.result as string ?? (e.target?.result as string)
+                      try {
+                        JSON.parse(text)
+                        setImportMode('json')
+                        onJsonChange(text)
+                        setJsonErr('')
+                      } catch {
+                        setJsonErr('Arquivo não é um JSON válido. Para arquivos XML do BCB, use o botão "⬆ XML".')
+                      }
                     }
                     reader.readAsText(file, 'UTF-8')
-                    e.target.value = '' // reset so same file can be selected again
+                    ev.target.value = ''
                   }}/>
                 </label>
-                <button onClick={() => { const t = JSON.stringify(TEMPLATES[cadoc],null,2); setJson(t); onJsonChange(t) }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>↺ Template</button>
-                <button onClick={() => { setJson(''); setLvState('idle'); setLvMsg('Aguardando JSON…') }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>✕ Limpar</button>
+
+                {/* ── Importar XML ── */}
+                {['3040','4010','3060'].includes(cadoc) && (
+                  <label style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #0891b250', background:'#0891b210', cursor:'pointer', color:'#0891b2', fontWeight:700, outline:'none', display:'inline-flex', alignItems:'center', gap:4 }}>
+                    ⬆ XML
+                    <input type="file" accept=".xml,.XML" style={{ display:'none' }} onChange={ev => {
+                      const file = ev.target.files?.[0]; if (!file) return
+                      const reader = new FileReader()
+                      reader.onload = e => {
+                        const text = e.target?.result as string
+                        const { ok, obj, erroMsg } = parseXmlParaCadoc(text, cadoc)
+                        if (!ok) {
+                          setJsonErr(`❌ Falha ao interpretar XML: ${erroMsg}`)
+                          setImportMode('json')
+                          return
+                        }
+                        const jsonStr = JSON.stringify(obj, null, 2)
+                        setImportMode('xml')
+                        setJsonErr('')
+                        onJsonChange(jsonStr)
+                      }
+                      reader.readAsText(file, 'UTF-8')
+                      ev.target.value = ''
+                    }}/>
+                  </label>
+                )}
+
+                <button onClick={() => {
+                  const t = JSON.stringify(TEMPLATES[cadoc],null,2)
+                  setImportMode('json')
+                  setJson(t); onJsonChange(t)
+                }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>↺ Template</button>
+
+                <button onClick={() => {
+                  setJson(''); setLvState('idle'); setLvMsg('Aguardando JSON…')
+                  setImportMode('json')
+                }} style={{ fontSize:10.5, padding:'4px 10px', borderRadius:6, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer', color:'#374151', outline:'none' }}>✕ Limpar</button>
               </div>
             </div>
-            <textarea value={json} onChange={e => onJsonChange(e.target.value)} spellCheck={false}
+
+            {/* Banner de origem XML */}
+            {importMode === 'xml' && (
+              <div style={{ padding:'7px 14px', background:'#eff6ff', borderBottom:'1px solid #bfdbfe', display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontSize:10, color:'#1d4ed8', fontFamily:'monospace', fontWeight:700 }}>XML→JSON</span>
+                <span style={{ fontSize:11, color:'#1d4ed8' }}>
+                  Arquivo XML do BCB convertido para JSON interno. O JSON abaixo é a representação editável — você pode ajustar antes de gerar/validar.
+                </span>
+              </div>
+            )}
+
+            <textarea value={json} onChange={e => { setImportMode('json'); onJsonChange(e.target.value) }} spellCheck={false}
               style={{ width:'100%', height:224, padding:'12px 14px', fontFamily:'"JetBrains Mono","Courier New",monospace', fontSize:12, background:'#0f172a', color:'#e2e8f0', border:'none', outline:'none', resize:'vertical', display:'block', boxSizing:'border-box', lineHeight:1.65 }}/>
+
             {/* Barra live validation */}
             <div style={{ padding:'7px 14px', background:lvBg, borderTop:'1px solid #f3f4f6', display:'flex', alignItems:'center', gap:8 }}>
               <div style={{ width:6, height:6, borderRadius:'50%', background:lvCor, flexShrink:0 }}/>
