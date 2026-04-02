@@ -237,10 +237,10 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         if (op.VarCamb === undefined || op.VarCamb === null || op.VarCamb === '') e('B01', 'VarCamb (variação cambial) ausente — use "0" para sem variação', 'VarCamb', ol)
         if (!op.CEP)     e('B01', 'CEP ausente — 8 dígitos do CEP do tomador', 'CEP', ol)
         if (!op.DtContr) e('B01', 'DtContr (data de contratação) ausente — formato AAAA-MM-DD', 'DtContr', ol)
-        if (!op.ClassOp) w('B01', 'ClassOp (classificação de risco) ausente — pode ser derivada do CartProvMin da Res.4966', 'ClassOp', ol)
+        if (!op.ClassOp) w('B01', 'ClassOp ausente no XML — campo obrigatório no leiaute 3040, verifique o sistema de origem', 'ClassOp', ol)
         if (op.VlrContr === undefined) e('B01', 'VlrContr (valor contratado) ausente', 'VlrContr', ol)
-        if (op.ProvConsttd === undefined) w('B01', 'ProvConsttd (provisão constituída) ausente — verificar se operação é agregada ou sem provisão', 'ProvConsttd', ol)
-        if (op.DiaAtraso === undefined) w('B01', 'DiaAtraso ausente — tratado como 0 (sem atraso)', 'DiaAtraso', ol)
+        if (op.ProvConsttd === undefined) w('B01', 'ProvConsttd ausente — operação sem provisão constituída ou campo não preenchido', 'ProvConsttd', ol)
+        // DiaAtraso: BCB omite quando = 0 (sem atraso), não é erro nem aviso
 
         // F01 — TaxEft
         if (op.TaxEft !== undefined) {
@@ -567,8 +567,11 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
 
         // Vencimentos — pelo menos um deve ter valor > 0 (exceto saídas)
         const vlrTotalVenc = Object.values(venc).reduce((s: number, v: any) => s + (Number(v)||0), 0)
-        if (!hasVencPrejuizo && vlrTotalVenc === 0) {
-          w('I10', 'Nenhum vencimento com valor > 0 — operação com carteira zerada (I10 — verificar)', 'vencimentos', ol)
+        // I10: só dispara em ops que deveriam ter vencimento (têm DtVencOp ou VlrContr > 0)
+        // Ops de saída/portabilidade (sem DtVencOp e sem vencimentos) são isentas
+        const deveriaTerVenc = !!op.DtVencOp || (Number(op.VlrContr)||0) > 0
+        if (!hasVencPrejuizo && vlrTotalVenc === 0 && deveriaTerVenc && !!op.DtVencOp) {
+          w('I10', 'Nenhum vencimento com valor > 0 — operação com DtVencOp mas carteira zerada (I10 — verificar)', 'vencimentos', ol)
         }
       })
 
@@ -876,19 +879,11 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
           // ClassOp: no XML real do BCB este atributo pode estar ausente.
           // Quando ausente, tentamos derivar do ContInstFinRes4966.CartProvMin
           // que contém a classificação mínima exigida (ex: 'C5', 'AA', 'A', etc.)
-          const classOpRaw = attr(op,'ClassOp')
-          const classOpDerived = (() => {
-            if (classOpRaw) return classOpRaw
-            // Tenta derivar do CartProvMin da Res.4966
-            const cart = attr(r4966El || op,'CartProvMin') || ''
-            // CartProvMin pode ser 'C1','C2','C3','C4','C5' ou 'AA','A','B'...
-            // Mapeamento CartProvMin → ClassOp aproximado
-            const cartMap: Record<string,string> = {
-              'C1':'AA','C2':'A','C3':'B','C4':'C','C5':'D',
-              'AA':'AA','A':'A','B':'B','C':'C','D':'D','E':'E','F':'F','G':'G','H':'H'
-            }
-            return cartMap[cart] || undefined
-          })()
+          // ClassOp: atributo direto do XML. Quando ausente (comum em XMLs do BCB
+          // que não preenchem explicitamente), deixa undefined — I01/S69 não disparam
+          // pois dependem de ClassOp conhecido. CartProvMin (Res.4966) é uma norma
+          // diferente da Res.2682 e NÃO pode ser mapeada para ClassOp.
+          const classOpRaw = attr(op,'ClassOp') || undefined
 
           const opObj: any = {
             IPOC:        attr(op,'IPOC'),
@@ -904,7 +899,7 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
             DtContr:     attr(op,'DtContr'),
             DtVencOp:    attr(op,'DtVencOp'),
             VlrContr:    num(attr(op,'VlrContr')),
-            ClassOp:     classOpDerived,
+            ClassOp:     classOpRaw,
             ProvConsttd: num(attr(op,'ProvConsttd')),
             DiaAtraso:   int(attr(op,'DiaAtraso')),
             CaracEspecial: attr(op,'CaracEspecial'),  // presente no XML BCB real
