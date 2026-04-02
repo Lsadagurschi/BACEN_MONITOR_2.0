@@ -19,7 +19,7 @@ const TEMPLATES: Record<CadocCode, object> = {
     ]
   },
   '3040': {
-    cabecalho: { CNPJ:'12345678', DtBase:'2026-01-31', Parte:'1', Remessa:'1', TpArq:'M', NomeResp:'João Silva', EmailResp:'joao@banco.com.br', TelResp:'11999990000', TotalCli:2, MetodApPE:'S', MetodDifTJE:'N' },
+    cabecalho: { CNPJ:'12345678', DtBase:'2026-01', Parte:'1', Remessa:'1', TpArq:'M', NomeResp:'João Silva', EmailResp:'joao@banco.com.br', TelResp:'11999990000', TotalCli:2, MetodApPE:'S', MetodDifTJE:'N' },
     clientes: [
       { Cd:'12345678000190', Tp:'2', IniRelactCli:'2020-01-01', Autorzc:'S', ClassCli:'A', TpCtrl:'1', PorteCli:'3', FatAnual:5000000,
         operacoes:[{ IPOC:'1234567800019020200101001', Contrt:'CONT-2024-001', Mod:'0202', NatuOp:'01', OrigemRec:'1', Indx:'3', VarCamb:'0', CEP:'01310100', TaxEft:18.50, DtContr:'2024-06-01', DtVencOp:'2027-06-01', VlrContr:50000, ClassOp:'A', ProvConsttd:500, DiaAtraso:0, vencimentos:{v110:25000,v120:25000}, ContInstFinRes4966:{ClasAtFin:'1',CartProvMin:'A',VlrContBr:50000,VlrPerdaAcum:0} }]
@@ -158,8 +158,8 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
     // B01 / B07
     if (!h.CNPJ)    e('B01', 'cabecalho.CNPJ ausente — obrigatório (8 dígitos raiz)', 'CNPJ', 'cabecalho')
     else if (!/^\d{8}$/.test(String(h.CNPJ))) e('B01', `CNPJ "${h.CNPJ}" inválido — deve ter 8 dígitos numéricos`, 'CNPJ', 'cabecalho')
-    if (!h.DtBase)  e('B01', 'cabecalho.DtBase ausente — formato AAAA-MM-DD', 'DtBase', 'cabecalho')
-    else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(h.DtBase))) e('F02', 'DtBase formato inválido — use AAAA-MM-DD', 'DtBase', 'cabecalho')
+    if (!h.DtBase)  e('B01', 'cabecalho.DtBase ausente — formato AAAA-MM (ex: 2026-01)', 'DtBase', 'cabecalho')
+    else if (!/^\d{4}-\d{2}$/.test(String(h.DtBase))) e('F02', 'DtBase formato inválido — use AAAA-MM (ex: 2026-01)', 'DtBase', 'cabecalho')
     // C47 — TotalCli obrigatório desde 2013
     if (h.TotalCli === undefined || h.TotalCli === null || h.TotalCli === '') e('C47', 'cabecalho.TotalCli ausente — obrigatório (regra C47)', 'TotalCli', 'cabecalho')
     if (!h.MetodApPE) e('B01', 'cabecalho.MetodApPE ausente — "S" ou "N"', 'MetodApPE', 'cabecalho')
@@ -174,7 +174,7 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
       w('B01', `TotalCli=${h.TotalCli} mas há ${clis.length} clientes no arquivo — inconsistência`, 'TotalCli', 'cabecalho')
     }
 
-    const dtBase = h.DtBase ? new Date(h.DtBase + 'T12:00:00') : null
+    const dtBase = h.DtBase ? new Date(h.DtBase + '-01T12:00:00') : null
     const hoje   = new Date()
 
     const cliSeen = new Map<string, number>() // Cd+Tp → índice
@@ -189,7 +189,7 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
       else if (!/^\d{4}-\d{2}-\d{2}$/.test(cli.IniRelactCli)) e('F02', 'IniRelactCli formato inválido — use AAAA-MM-DD', 'IniRelactCli', loc)
       if (!cli.Autorzc)      e('B01', 'Autorzc (autorização SCR) ausente — "S" ou "N"', 'Autorzc', loc)
       else if (!['S','N'].includes(String(cli.Autorzc))) e('B01', `Autorzc "${cli.Autorzc}" inválido — deve ser "S" ou "N"`, 'Autorzc', loc)
-      if (!cli.ClassCli)     e('B01', 'ClassCli (classificação do cliente) ausente', 'ClassCli', loc)
+      if (!cli.ClassCli)     w('B01', 'ClassCli (classificação do cliente) ausente — campo opcional em alguns formatos XML', 'ClassCli', loc)
       else if (!['AA','A','B','C','D','E','F','G','H','HH'].includes(String(cli.ClassCli))) {
         e('B01', `ClassCli "${cli.ClassCli}" inválido — valores válidos: AA, A, B, C, D, E, F, G, H, HH`, 'ClassCli', loc)
       }
@@ -237,10 +237,10 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         if (op.VarCamb === undefined || op.VarCamb === null || op.VarCamb === '') e('B01', 'VarCamb (variação cambial) ausente — use "0" para sem variação', 'VarCamb', ol)
         if (!op.CEP)     e('B01', 'CEP ausente — 8 dígitos do CEP do tomador', 'CEP', ol)
         if (!op.DtContr) e('B01', 'DtContr (data de contratação) ausente — formato AAAA-MM-DD', 'DtContr', ol)
-        if (!op.ClassOp) e('B01', 'ClassOp (classificação de risco A-H) ausente', 'ClassOp', ol)
+        if (!op.ClassOp) w('B01', 'ClassOp (classificação de risco) ausente — pode ser derivada do CartProvMin da Res.4966', 'ClassOp', ol)
         if (op.VlrContr === undefined) e('B01', 'VlrContr (valor contratado) ausente', 'VlrContr', ol)
-        if (op.ProvConsttd === undefined) e('B01', 'ProvConsttd (provisão constituída) ausente', 'ProvConsttd', ol)
-        if (op.DiaAtraso === undefined) e('B01', 'DiaAtraso (dias de atraso) ausente — informar 0 se sem atraso', 'DiaAtraso', ol)
+        if (op.ProvConsttd === undefined) w('B01', 'ProvConsttd (provisão constituída) ausente — verificar se operação é agregada ou sem provisão', 'ProvConsttd', ol)
+        if (op.DiaAtraso === undefined) w('B01', 'DiaAtraso ausente — tratado como 0 (sem atraso)', 'DiaAtraso', ol)
 
         // F01 — TaxEft
         if (op.TaxEft !== undefined) {
@@ -263,10 +263,15 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
           if (dtContr > hoje) e('S15', `DtContr (${op.DtContr}) futura — não pode ser posterior à data atual (S15)`, 'DtContr', ol)
         }
 
-        // C11 — DtVencOp obrigatória (exceto v199)
+        // C11 — DtVencOp obrigatória, exceto:
+        // a) operações com vencimento v199 (operações sem data)
+        // b) operações de saída/portabilidade (sem nenhum vencimento futuro — são baixas)
         const venc = op.vencimentos || {}
-        const hasV199 = venc.v199 !== undefined && venc.v199 > 0
-        if (!op.DtVencOp && !hasV199) e('C11', 'DtVencOp ausente — obrigatória exceto para operações com vencimento v199 (C11)', 'DtVencOp', ol)
+        const hasV199      = (venc.v199 || 0) > 0
+        const hasQualqVenc = Object.keys(venc).length > 0
+        // Operações de saída legítimas não têm vencimentos nem DtVencOp
+        const isSaida = !hasQualqVenc && !op.DtVencOp
+        if (!op.DtVencOp && !hasV199 && !isSaida) e('C11', 'DtVencOp ausente — obrigatória exceto para operações sem vencimento (v199) ou de saída (C11)', 'DtVencOp', ol)
 
         // C28 — VlrContr obrigatório para modalidades não rotativas com vencimentos > v80
         const modStr = String(op.Mod || '')
@@ -410,8 +415,8 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         }
 
         // S19 — Data-base mínima admissível (set/2010)
-        if (h.DtBase && h.DtBase < '2010-09-01') {
-          e('S19', `DtBase ${h.DtBase} anterior à mínima admissível (set/2010) (S19)`, 'DtBase', 'cabecalho')
+        if (h.DtBase && h.DtBase < '2010-09') {
+          e('S19', `DtBase ${h.DtBase} anterior à mínima admissível (2010-09) (S19)`, 'DtBase', 'cabecalho')
         }
 
         // S20 (reforço) — v310/v320/v330 só para ClassOp HH + DiaAtraso mínimo (S29)
@@ -859,29 +864,51 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
 
           const r4966El = op.querySelector(':scope > ContInstFinRes4966')
           const r4966 = r4966El ? {
-            ClasAtFin:   attr(r4966El,'ClasAtFin'),
-            CartProvMin: attr(r4966El,'CartProvMin'),
-            VlrContBr:   num(attr(r4966El,'VlrContBr')),
-            VlrPerdaAcum:num(attr(r4966El,'VlrPerdaAcum')),
-            EstInstFin:  int(attr(r4966El,'EstInstFin')),
+            ClasAtFin:    attr(r4966El,'ClasAtFin'),
+            CartProvMin:  attr(r4966El,'CartProvMin'),
+            VlrContBr:    num(attr(r4966El,'VlrContBr')),
+            VlrPerdaAcum: num(attr(r4966El,'VlrPerdaAcum')),  // ausente em muitos XMLs do BCB
+            EstInstFin:   int(attr(r4966El,'EstInstFin')) ?? int(attr(r4966El,'ClasAtFin')),
+            TJE:          num(attr(r4966El,'TJE')),             // presente no XML BCB real
+            TratRisc:     attr(r4966El,'TratRisc'),             // presente no XML BCB real
           } : undefined
 
+          // ClassOp: no XML real do BCB este atributo pode estar ausente.
+          // Quando ausente, tentamos derivar do ContInstFinRes4966.CartProvMin
+          // que contém a classificação mínima exigida (ex: 'C5', 'AA', 'A', etc.)
+          const classOpRaw = attr(op,'ClassOp')
+          const classOpDerived = (() => {
+            if (classOpRaw) return classOpRaw
+            // Tenta derivar do CartProvMin da Res.4966
+            const cart = attr(r4966El || op,'CartProvMin') || ''
+            // CartProvMin pode ser 'C1','C2','C3','C4','C5' ou 'AA','A','B'...
+            // Mapeamento CartProvMin → ClassOp aproximado
+            const cartMap: Record<string,string> = {
+              'C1':'AA','C2':'A','C3':'B','C4':'C','C5':'D',
+              'AA':'AA','A':'A','B':'B','C':'C','D':'D','E':'E','F':'F','G':'G','H':'H'
+            }
+            return cartMap[cart] || undefined
+          })()
+
           const opObj: any = {
-            IPOC:       attr(op,'IPOC'),
-            Contrt:     attr(op,'Contrt'),
-            Mod:        attr(op,'Mod'),
-            NatuOp:     attr(op,'NatuOp'),
-            OrigemRec:  attr(op,'OrigemRec'),
-            Indx:       attr(op,'Indx'),
-            VarCamb:    attr(op,'VarCamb'),
-            CEP:        attr(op,'CEP'),
-            TaxEft:     num(attr(op,'TaxEft')),
-            DtContr:    attr(op,'DtContr'),
-            DtVencOp:   attr(op,'DtVencOp'),
-            VlrContr:   num(attr(op,'VlrContr')),
-            ClassOp:    attr(op,'ClassOp'),
-            ProvConsttd:num(attr(op,'ProvConsttd')),
-            DiaAtraso:  int(attr(op,'DiaAtraso')),
+            IPOC:        attr(op,'IPOC'),
+            Contrt:      attr(op,'Contrt'),
+            Mod:         attr(op,'Mod'),
+            NatuOp:      attr(op,'NatuOp'),
+            OrigemRec:   attr(op,'OrigemRec'),
+            Indx:        attr(op,'Indx'),
+            PercIndx:    num(attr(op,'PercIndx')),   // presente no XML BCB real
+            VarCamb:     attr(op,'VarCamb'),
+            CEP:         attr(op,'CEP'),
+            TaxEft:      num(attr(op,'TaxEft')),
+            DtContr:     attr(op,'DtContr'),
+            DtVencOp:    attr(op,'DtVencOp'),
+            VlrContr:    num(attr(op,'VlrContr')),
+            ClassOp:     classOpDerived,
+            ProvConsttd: num(attr(op,'ProvConsttd')),
+            DiaAtraso:   int(attr(op,'DiaAtraso')),
+            CaracEspecial: attr(op,'CaracEspecial'),  // presente no XML BCB real
+            QtdParcelas:   int(attr(op,'QtdParcelas')),
           }
           if (Object.keys(vencimentos).length > 0) opObj.vencimentos = vencimentos
           if (r4966) opObj.ContInstFinRes4966 = r4966
@@ -893,7 +920,7 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
           Tp:          attr(cli,'Tp'),
           IniRelactCli:attr(cli,'IniRelactCli'),
           Autorzc:     attr(cli,'Autorzc'),
-          ClassCli:    attr(cli,'ClassCli'),
+          ClassCli:    attr(cli,'ClassCli') || undefined,  // ausente em muitos XMLs do BCB
           TpCtrl:      attr(cli,'TpCtrl'),
           PorteCli:    attr(cli,'PorteCli'),
           FatAnual:    num(attr(cli,'FatAnual')),
