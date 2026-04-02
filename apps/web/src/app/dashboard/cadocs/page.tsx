@@ -548,13 +548,15 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
           e('I05', 'Código de vencimento duplicado na mesma operação (I05)', 'vencimentos', ol)
         }
 
-        // I13 — Responsabilidade total do cliente >= R$ 200,00
-        // (validado no nível do cliente, não da operação — feito abaixo)
-        else {
+        // ContInstFinRes4966 — Res. 4.966 (IFRS9/ECL)
+        // XML do BCB pode não ter esta tag em arquivos mais antigos ou de IFs dispensadas
+        if (!op.ContInstFinRes4966) {
+          w('C02', 'ContInstFinRes4966 (dados IFRS9/Res.4966) ausente — exigido pela Resolução CMN 4.966/2021', 'ContInstFinRes4966', ol)
+        } else {
           const r4966 = op.ContInstFinRes4966
-          if (!r4966.ClasAtFin)   w('C02', 'ContInstFinRes4966.ClasAtFin ausente', 'ClasAtFin', ol)
-          if (!r4966.CartProvMin) w('C02', 'ContInstFinRes4966.CartProvMin ausente', 'CartProvMin', ol)
-          if (r4966.VlrContBr === undefined) w('C02', 'ContInstFinRes4966.VlrContBr ausente', 'VlrContBr', ol)
+          if (!r4966.ClasAtFin)               w('C02', 'ContInstFinRes4966.ClasAtFin ausente', 'ClasAtFin', ol)
+          if (!r4966.CartProvMin)              w('C02', 'ContInstFinRes4966.CartProvMin ausente', 'CartProvMin', ol)
+          if (r4966.VlrContBr === undefined)   w('C02', 'ContInstFinRes4966.VlrContBr ausente', 'VlrContBr', ol)
           if (r4966.VlrPerdaAcum === undefined) w('C02', 'ContInstFinRes4966.VlrPerdaAcum ausente', 'VlrPerdaAcum', ol)
         }
 
