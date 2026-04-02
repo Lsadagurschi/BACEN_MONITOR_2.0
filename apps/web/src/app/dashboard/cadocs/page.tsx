@@ -237,7 +237,7 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         if (op.VarCamb === undefined || op.VarCamb === null || op.VarCamb === '') e('B01', 'VarCamb (variação cambial) ausente — use "0" para sem variação', 'VarCamb', ol)
         if (!op.CEP)     e('B01', 'CEP ausente — 8 dígitos do CEP do tomador', 'CEP', ol)
         if (!op.DtContr) e('B01', 'DtContr (data de contratação) ausente — formato AAAA-MM-DD', 'DtContr', ol)
-        if (!op.ClassOp) w('B01', 'ClassOp ausente no XML — campo obrigatório no leiaute 3040, verifique o sistema de origem', 'ClassOp', ol)
+        // ClassOp: XML BCB real não envia este campo — omissão normal, sem aviso
         if (op.VlrContr === undefined) e('B01', 'VlrContr (valor contratado) ausente', 'VlrContr', ol)
         if (op.ProvConsttd === undefined) w('B01', 'ProvConsttd ausente — operação sem provisão constituída ou campo não preenchido', 'ProvConsttd', ol)
         // DiaAtraso: BCB omite quando = 0 (sem atraso), não é erro nem aviso
@@ -559,19 +559,20 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
           w('C02', 'ContInstFinRes4966 (dados IFRS9/Res.4966) ausente — exigido pela Resolução CMN 4.966/2021', 'ContInstFinRes4966', ol)
         } else {
           const r4966 = op.ContInstFinRes4966
-          if (!r4966.ClasAtFin)               w('C02', 'ContInstFinRes4966.ClasAtFin ausente', 'ClasAtFin', ol)
-          if (!r4966.CartProvMin)              w('C02', 'ContInstFinRes4966.CartProvMin ausente', 'CartProvMin', ol)
-          if (r4966.VlrContBr === undefined)   w('C02', 'ContInstFinRes4966.VlrContBr ausente', 'VlrContBr', ol)
-          if (r4966.VlrPerdaAcum === undefined) w('C02', 'ContInstFinRes4966.VlrPerdaAcum ausente', 'VlrPerdaAcum', ol)
+          if (!r4966.ClasAtFin)             w('C02', 'ContInstFinRes4966.ClasAtFin ausente', 'ClasAtFin', ol)
+          if (!r4966.CartProvMin)            w('C02', 'ContInstFinRes4966.CartProvMin ausente', 'CartProvMin', ol)
+          if (r4966.VlrContBr === undefined) w('C02', 'ContInstFinRes4966.VlrContBr ausente', 'VlrContBr', ol)
+          // VlrPerdaAcum: XML BCB não envia — calculado internamente pela IF, sem aviso
         }
 
-        // Vencimentos — pelo menos um deve ter valor > 0 (exceto saídas)
+        // Vencimentos — pelo menos um deve ter valor > 0 (exceto saídas e cartão)
         const vlrTotalVenc = Object.values(venc).reduce((s: number, v: any) => s + (Number(v)||0), 0)
-        // I10: só dispara em ops que deveriam ter vencimento (têm DtVencOp ou VlrContr > 0)
-        // Ops de saída/portabilidade (sem DtVencOp e sem vencimentos) são isentas
-        const deveriaTerVenc = !!op.DtVencOp || (Number(op.VlrContr)||0) > 0
-        if (!hasVencPrejuizo && vlrTotalVenc === 0 && deveriaTerVenc && !!op.DtVencOp) {
-          w('I10', 'Nenhum vencimento com valor > 0 — operação com DtVencOp mas carteira zerada (I10 — verificar)', 'vencimentos', ol)
+        // I10: isenta ops de saída (sem DtVencOp) e modalidades de cartão (1304, 0204)
+        // Para cartão crédito/rotativo o BCB não exige <Venc> explícito
+        const modNum = parseInt(String(op.Mod || '0'))
+        const isCartao = [1304, 204].includes(modNum) || String(op.Mod||'').startsWith('020')
+        if (!hasVencPrejuizo && vlrTotalVenc === 0 && !!op.DtVencOp && !isCartao) {
+          w('I10', 'Nenhum vencimento com valor > 0 — operação com DtVencOp mas sem saldo distribuído nos vértices (I10)', 'vencimentos', ol)
         }
       })
 
