@@ -1148,12 +1148,14 @@ function calcBatimentoCruzado(d3040: any, d4010: any): BatItem[] {
   items.push(item('MV', 'Cartão de crédito (Mod 1304, v110–v290)', '1.8.8.79.00-3', vlrCartao, ['1887900300'], true))
 
   // ── P — Provisão Total ────────────────────────────────────────────────────────
+  // Busca conta de despesa de PDD (7.1.1.00.00-3) para bater com ProvConsttd SCR
   const totalProv = allOps.filter(o => NATOPS.includes(String(o.NatuOp||''))).reduce((s, o) => s + Number(o.ProvConsttd || 0), 0)
-  items.push(item('P', 'Provisão total constituída (ProvConsttd)', '1.6.1.x + 1.6.2.x + 1.8.9.x', totalProv, ['161', '162', '189']))
+  items.push(item('P', 'Provisão total constituída (ProvConsttd)', '7.1.1.00.00-3 (Despesa de PDD)', totalProv, ['7110'], false))
 
   // ── MB — VlrContBr Res.4966 ───────────────────────────────────────────────────
+  // VlrContBr inclui carteira ativa + limites disponíveis + outros valores contábeis brutos
   const vlrContBrTotal = allOps.reduce((s, o) => s + Number(o.ContInstFinRes4966?.VlrContBr || 0), 0)
-  items.push(item('MB', 'Valor contábil bruto (Res.4966 VlrContBr)', '1.6.x + 1.8.x (bruto)', vlrContBrTotal, ['16', '18']))
+  items.push(item('MB', 'Valor contábil bruto (Res.4966 VlrContBr)', '1.6.x + 1.8.x + 3.0.9.70/80/86', vlrContBrTotal, ['16', '18', '30970', '30980', '30986']))
 
   // ── R05 — Classe D ────────────────────────────────────────────────────────────
   const vlrClassD = allOps.filter(o => o.ClassOp === 'D' && NATOPS.includes(String(o.NatuOp||'')) && vencAtivos(o)).reduce((s, o) => s + sumVenc110_290(o), 0)
