@@ -667,12 +667,13 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
       w('T07', `Arrendamento Mercantil (Mod 12xx): ∑venc = R$${totalArrend.toLocaleString('pt-BR')} — deve bater com rubricas COSIF 3.1.x.20.00 deduzido de 1.8.8.78.15/16 do CADOC 4010 (T07)`, 'Mod', 'batimento')
     }
 
-    // M02/M03 — Empréstimos e Títulos Descontados (atualmente "não" no XLS mas relevantes)
+    // M02/M15/M16 — Empréstimos, Coobrigações e Cedidos (batimento com COSIF)
+    // Nota: Mod 03xx (Capital de Giro) já coberto no bloco MOD_COSIF_ATIVO acima
+    // Títulos Descontados (M03) corresponde ao prefixo '03' do COSIF, não do SCR
     const modBatMap: Record<string,{label:string;cosif:string}> = {
-      '02': {label:'Empréstimos',              cosif:'1.6.1.20.00-8'},
-      '03': {label:'Títulos Descontados',       cosif:'1.6.1.30.00-5'},
-      '15': {label:'Coobrigações (exceto 1505)',cosif:'3.0.1.30.00-5 + 3.0.1.85.00-5 + 3.0.1.90.00-7'},
-      '16': {label:'Cedidos s/ coobrigação',    cosif:'3.0.9.58.00-5'},
+      '02': {label:'Empréstimos (Mod 02xx)',          cosif:'1.6.1.20.00-8'},
+      '15': {label:'Coobrigações (exceto Mod 1505)',  cosif:'3.0.1.30.00-5 + 3.0.1.85.00-5 + 3.0.1.90.00-7'},
+      '16': {label:'Cedidos s/ coobrigação (Mod 16xx)',cosif:'3.0.9.58.00-5'},
     }
     Object.entries(modBatMap).forEach(([modPrefix, info]) => {
       const vlrMod = allOps
@@ -684,7 +685,7 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         .filter((o:any) => NATOPS_PROP.includes(String(o.NatuOp||'')) && VENC_ATIVOS(o.vencimentos))
         .reduce((s:number,o:any)=>s+Object.entries(o.vencimentos||{}).reduce((ss:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?ss+Number(v):ss},0),0)
       if (vlrMod > 0) {
-        const ruleCode = modPrefix === '02' ? 'M02' : modPrefix === '03' ? 'M03' : modPrefix === '15' ? 'M15' : 'M16'
+        const ruleCode = modPrefix === '02' ? 'M02' : modPrefix === '15' ? 'M15' : 'M16'
         w(ruleCode, `${info.label}: ∑venc (v110–v290) = R$${vlrMod.toLocaleString('pt-BR')} — conferir batimento com COSIF ${info.cosif} do CADOC 4010 (${ruleCode})`, 'Mod', 'batimento')
       }
     })
@@ -719,11 +720,25 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
       }
     })
 
-    // M01–M24 — Batimento por Modalidade × Rubricas COSIF (ativos = sim)
+    // M01–M24 — Batimento por Modalidade × Rubricas COSIF
+    // Regra MV: aviso por modalidade específica com rubrica COSIF correspondente
+    // Nota: Mod 03xx = Capital de Giro (1.6.2.10.00-4), NÃO Títulos Descontados (M03)
     const MOD_COSIF_ATIVO: Record<string,string> = {
-      '01':'1.6.1.10.00-1','04':'1.6.2.10.00-4','05':'1.6.2.20.00-1','06':'1.6.2.25.00-6',
-      '07':'1.6.2.30.00-8','08':'1.6.3.00.00-0','09':'1.6.4.00.00-3','10':'1.6.5.00.00-6',
-      '11':'1.6.6.00.00-9','1304':'1.8.8.79.00-3','1301':'1.8.1.10.10.10-9','14':'1.4.3.00.00-2',
+      '01':'1.6.1.10.00-1', '02':'1.6.1.20.00-8',              // consignado, pessoal
+      '04':'1.6.2.10.00-4', '05':'1.6.2.20.00-1',              // capital giro, rural
+      '06':'1.6.2.25.00-6', '07':'1.6.2.30.00-8',
+      '08':'1.6.3.00.00-0', '09':'1.6.4.00.00-3',
+      '10':'1.6.5.00.00-6', '11':'1.6.6.00.00-9',
+      '1304':'1.8.8.79.00-3', '1301':'1.8.1.10.10.10-9',
+      '14':'1.4.3.00.00-2',
+      // Mod 03xx = Capital de Giro/Desconto → 1.6.2.10.00-4 (não é M03/Títulos Descontados)
+      '03':'1.6.2.10.00-4',
+    }
+    // Regras MV: código de regra por modalidade
+    const MOD_RULE_CODE: Record<string,string> = {
+      '01':'M01','02':'M02','03':'M04','04':'M04','05':'M05',
+      '06':'M06','07':'M07','08':'M08','09':'M09','10':'M10',
+      '11':'M11','1304':'MV','1301':'MV','14':'M14',
     }
     const byMod3040: Record<string,number> = {}
     allOps
@@ -733,11 +748,19 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
         if (!byMod3040[m]) byMod3040[m] = 0
         byMod3040[m] += Object.entries(o.vencimentos||{}).reduce((s:number,[k,v]:[string,any])=>{const n=parseInt(k.replace('v','')); return (n>=110&&n<=290)?s+Number(v):s},0)
       })
+    // Consolida por prefixo de 2 dígitos (evita disparo por operação individual)
+    const byModConsolid: Record<string,{vlr:number;cosif:string;rule:string}> = {}
     Object.entries(byMod3040).forEach(([mod, vlr]) => {
-      const cosif = MOD_COSIF_ATIVO[mod] || MOD_COSIF_ATIVO[mod.slice(0,2)]
-      if (cosif && vlr > 0) {
-        w('MV', `Modalidade ${mod}: ∑venc (v110–v290) = R$${vlr.toLocaleString('pt-BR')} — deve bater com rubrica COSIF ${cosif} do CADOC 4010 (Regra MV)`, 'Mod', 'batimento')
-      }
+      const prefix2 = mod.length >= 4 && ['1304','1301'].includes(mod) ? mod : mod.slice(0,2)
+      const cosif = MOD_COSIF_ATIVO[mod] || MOD_COSIF_ATIVO[prefix2]
+      const rule  = MOD_RULE_CODE[mod]  || MOD_RULE_CODE[prefix2] || 'MV'
+      if (!cosif || vlr <= 0) return
+      const key = `${rule}|${cosif}`
+      if (!byModConsolid[key]) byModConsolid[key] = {vlr:0, cosif, rule}
+      byModConsolid[key].vlr += vlr
+    })
+    Object.entries(byModConsolid).forEach(([, {vlr, cosif, rule}]) => {
+      w(rule, `∑venc (v110–v290) = R$${vlr.toLocaleString('pt-BR')} — deve bater com rubrica COSIF ${cosif} do CADOC 4010 (${rule})`, 'Mod', 'batimento')
     })
 
     // P (Provisão por Modalidade) — totais de ProvConsttd por Mod × COSIF
@@ -897,7 +920,7 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
       root.querySelectorAll(':scope > Cli').forEach(cli => {
         const operacoes: any[] = []
         cli.querySelectorAll(':scope > Op').forEach(op => {
-          const vencEl = op.querySelector(':scope > Venc')
+          const vencEl = op.querySelector(':scope > Venc') || op.querySelector('Venc')
           const vencimentos: any = {}
           if (vencEl) {
             vencEl.getAttributeNames().forEach(name => {
@@ -1083,12 +1106,17 @@ function calcBatimentoCruzado(d3040: any, d4010: any): BatItem[] {
       ? cosifs.reduce((s, c) => s + (contaMap.get(normalizaCosif(c)) || 0), 0)
       : 0
 
-  const vencAtivos = (v: any) => Object.keys(v || {}).some(k => {
-    const n = parseInt(k.replace('v', '')); return n >= 110 && n <= 290
-  })
-  const sumVenc110_290 = (o: any) => Object.entries(o.vencimentos || {}).reduce((s: number, [k, v]: [string, any]) => {
-    const n = parseInt(k.replace('v', '')); return (n >= 110 && n <= 290) ? s + Number(v) : s
-  }, 0)
+  const vencAtivos = (o: any) => {
+    const v = o.vencimentos || {}
+    return Object.keys(v).some(k => { const n = parseInt(k.replace('v','')); return n >= 110 && n <= 290 })
+  }
+  const sumVenc110_290 = (o: any): number => {
+    const v = o.vencimentos || {}
+    return Object.entries(v).reduce((s: number, [k, val]: [string, any]) => {
+      const n = parseInt(k.replace('v', ''))
+      return (n >= 110 && n <= 290) ? s + (parseFloat(String(val)) || 0) : s
+    }, 0)
+  }
 
   const NATOPS = ['01', '02', '03', '04', '05', '06', '07']
 
