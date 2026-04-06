@@ -30,10 +30,10 @@ const TEMPLATES: Record<CadocCode, object> = {
     ]
   },
   '4010': {
-    cabecalho: { codigoDocumento:'4010', cnpj:'12345678', dataBase:'202601', tipoRemessa:'N' },
+    cabecalho: { codigoDocumento:'4010', cnpj:'12345678', dataBase:'2026-01', tipoRemessa:'I' },
     contas: [
-      {codigoConta:'1.0.0.00.00-0',saldo:1500000},{codigoConta:'1.1.0.00.00-1',saldo:800000},
-      {codigoConta:'2.0.0.00.00-3',saldo:1200000},{codigoConta:'3.0.0.00.00-6',saldo:250000},
+      {codigoConta:'1000000000',saldo:1500000},{codigoConta:'1100000000',saldo:800000},
+      {codigoConta:'2000000000',saldo:1200000},{codigoConta:'3000000000',saldo:250000},
     ]
   },
   '3060': {
@@ -99,17 +99,55 @@ function validar(cadoc: CadocCode, json: string): { erros: ValErr[]; avisos: Val
 
   // ── CADOC 4010 ─────────────────────────────────────────────────────────────
   if (cadoc === '4010') {
-    if (!obj.cabecalho?.cnpj)     e('B01', 'cabecalho.cnpj ausente', 'cnpj', 'cabecalho')
-    if (!obj.cabecalho?.dataBase) e('B01', 'cabecalho.dataBase ausente (formato AAAAMM)', 'dataBase', 'cabecalho')
-    else if (!/^\d{6}$/.test(String(obj.cabecalho.dataBase))) e('F02', 'cabecalho.dataBase deve ter 6 dígitos (AAAAMM)', 'dataBase', 'cabecalho')
-    if (!obj.cabecalho?.tipoRemessa) e('B01', 'cabecalho.tipoRemessa ausente ("N" = normal, "S" = substituição)', 'tipoRemessa', 'cabecalho')
-    if (!Array.isArray(obj.contas) || !obj.contas.length) e('B17', 'contas ausente ou vazio — arquivo deve conter contas COSIF', 'contas')
+    // Cabeçalho — conforme XSD_4010_v0 e Leiaute_4010_xmlV1
+    if (!obj.cabecalho?.cnpj)
+      e('B01', 'cabecalho.cnpj ausente — 8 caracteres alfanuméricos (XSD: [A-Za-z0-9]{8})', 'cnpj', 'cabecalho')
+    else if (!/^[A-Za-z0-9]{8}$/.test(String(obj.cabecalho.cnpj)))
+      e('F02', `cnpj "${obj.cabecalho.cnpj}" inválido — deve ter exatamente 8 caracteres alfanuméricos`, 'cnpj', 'cabecalho')
+
+    if (!obj.cabecalho?.dataBase)
+      e('B01', 'cabecalho.dataBase ausente — formato AAAA-MM (ex: 2026-01)', 'dataBase', 'cabecalho')
+    else if (!/^\d{4}-\d{2}$/.test(String(obj.cabecalho.dataBase)))
+      e('F02', `dataBase "${obj.cabecalho.dataBase}" inválido — use formato AAAA-MM (XSD: xs:gYearMonth)`, 'dataBase', 'cabecalho')
+    else if (String(obj.cabecalho.dataBase) < '2025-01')
+      e('F02', `dataBase ${obj.cabecalho.dataBase} anterior ao mínimo permitido (2025-01) — XSD minInclusive`, 'dataBase', 'cabecalho')
+
+    if (!obj.cabecalho?.tipoRemessa)
+      e('B01', 'cabecalho.tipoRemessa ausente — "I" (inclusão) ou "S" (substituição)', 'tipoRemessa', 'cabecalho')
+    else if (!['I','S'].includes(String(obj.cabecalho.tipoRemessa)))
+      e('F02', `tipoRemessa "${obj.cabecalho.tipoRemessa}" inválido — XSD aceita apenas "I" ou "S"`, 'tipoRemessa', 'cabecalho')
+
+    if (!obj.cabecalho?.codigoDocumento)
+      e('B01', 'cabecalho.codigoDocumento ausente — deve ser "4010" ou "4016"', 'codigoDocumento', 'cabecalho')
+    else if (!['4010','4016'].includes(String(obj.cabecalho.codigoDocumento)))
+      e('F02', `codigoDocumento "${obj.cabecalho.codigoDocumento}" inválido — XSD aceita apenas 4010 ou 4016`, 'codigoDocumento', 'cabecalho')
+
+    if (!Array.isArray(obj.contas) || !obj.contas.length)
+      e('B17', 'contas ausente ou vazio — mínimo 1 conta COSIF obrigatória (XSD: minOccurs=1)', 'contas')
+
     ;(obj.contas || []).forEach((c: any, i: number) => {
       const loc = `contas[${i}]`
-      if (!c.codigoConta) e('B01', 'codigoConta ausente', 'codigoConta', loc)
-      if (c.saldo === undefined || c.saldo === null) e('B01', 'saldo ausente', 'saldo', loc)
-      else if (typeof c.saldo !== 'number') e('F01', 'saldo deve ser numérico', 'saldo', loc)
+      if (!c.codigoConta)
+        e('B01', 'codigoConta ausente — 10 dígitos numéricos sem pontos ou traços (XSD: [0-9]{10})', 'codigoConta', loc)
+      else if (!/^\d{10}$/.test(String(c.codigoConta)))
+        e('F02', `codigoConta "${c.codigoConta}" inválido — deve ter exatamente 10 dígitos numéricos sem pontos/traços`, 'codigoConta', loc)
+
+      if (c.saldo === undefined || c.saldo === null)
+        e('B01', 'saldo ausente — saldo de fechamento em R$ com 2 decimais', 'saldo', loc)
+      else if (typeof c.saldo !== 'number')
+        e('F01', 'saldo deve ser numérico (decimal com até 18 dígitos e 2 casas decimais — XSD: tipoSaldo)', 'saldo', loc)
+      else if (Math.abs(c.saldo) >= 1e17)
+        e('F01', `saldo ${c.saldo} fora do limite — XSD: ±99999999999999999`, 'saldo', loc)
     })
+
+    // Aviso: contas duplicadas (XSD define xs:key pkConta)
+    const contaSeen = new Set<string>()
+    ;(obj.contas || []).forEach((c: any, i: number) => {
+      const k = String(c.codigoConta || '')
+      if (k && contaSeen.has(k)) w('B01', `codigoConta "${k}" duplicado — XSD define chave única por conta (pkConta)`, 'codigoConta', `contas[${i}]`)
+      else contaSeen.add(k)
+    })
+
     return { erros, avisos }
   }
 
@@ -755,8 +793,10 @@ function gerar(cadoc: CadocCode, obj: any): string {
 
   if (cadoc === '4010') {
     const h = obj.cabecalho || {}
-    let x = `<?xml version="1.0" encoding="UTF-8"?>\n<documento${xa('codigoDocumento',h.codigoDocumento||'4010')}${xa('cnpj',h.cnpj)}${xa('dataBase',h.dataBase)}${xa('tipoRemessa',h.tipoRemessa||'N')}>\n  <contas>\n`
-    ;(obj.contas||[]).forEach((c: any) => { x += `    <conta${xa('codigoConta',c.codigoConta)}${xa('saldo',c.saldo)} />\n` })
+    // XSD: tipoRemessa deve ser 'I' ou 'S'. saldo: decimal 2 casas. codigoConta: 10 dígitos
+    const fmtSaldo = (v: any) => Number(v || 0).toFixed(2)
+    let x = `<?xml version="1.0" encoding="UTF-8"?>\n<documento${xa('codigoDocumento',h.codigoDocumento||'4010')}${xa('cnpj',h.cnpj)}${xa('dataBase',h.dataBase)}${xa('tipoRemessa',['I','S'].includes(h.tipoRemessa)?h.tipoRemessa:'I')}>\n  <contas>\n`
+    ;(obj.contas||[]).forEach((c: any) => { x += `    <conta codigoConta="${esc(c.codigoConta)}" saldo="${fmtSaldo(c.saldo)}" />\n` })
     return x + `  </contas>\n</documento>`
   }
 
@@ -930,15 +970,21 @@ function parseXmlParaCadoc(xmlText: string, cadoc: CadocCode): { ok: boolean; ob
     // ── CADOC 4010 ─────────────────────────────────────────────────────────────
     if (cadoc === '4010') {
       const root = doc.documentElement
+      // Normaliza codigoConta: remove pontos e traços, garante 10 dígitos (XSD: [0-9]{10})
+      const normConta = (v: string | undefined) => {
+        if (!v) return v
+        const d = String(v).replace(/[.\-]/g, '')
+        return /^\d{10}$/.test(d) ? d : v  // mantém original se não encaixar
+      }
       const cabecalho = {
         codigoDocumento: attr(root,'codigoDocumento') || '4010',
         cnpj:            attr(root,'cnpj'),
         dataBase:        attr(root,'dataBase'),
-        tipoRemessa:     attr(root,'tipoRemessa') || 'N',
+        tipoRemessa:     attr(root,'tipoRemessa') || 'I',  // XSD: I ou S
       }
       const contas: any[] = []
       root.querySelectorAll('conta').forEach(c => {
-        contas.push({ codigoConta: attr(c,'codigoConta'), saldo: num(attr(c,'saldo')) })
+        contas.push({ codigoConta: normConta(attr(c,'codigoConta')), saldo: num(attr(c,'saldo')) })
       })
       return { ok:true, obj:{ cabecalho, contas } }
     }
@@ -995,6 +1041,111 @@ function applyIFData(tmpl: object, cadoc: CadocCode, cnpj: string, ispb: string)
   return deep(tmpl)
 }
 
+// ─── Batimento Cruzado 3040 × 4010 ────────────────────────────────────────────
+interface BatItem {
+  regra: string
+  descricao: string
+  cosif: string
+  valor3040: number
+  valor4010: number | null
+  diferenca: number | null
+  status: 'ok' | 'divergente' | 'sem4010' | 'info'
+}
+
+// Normaliza código COSIF para 10 dígitos (como no XSD: [0-9]{10})
+// '1.6.1.20.00-8' → '1612000800' | '1610200008' (alguns formatos variam)
+function normalizaCosif(v: string): string {
+  return String(v || '').replace(/[.\-]/g, '')
+}
+
+function calcBatimentoCruzado(d3040: any, d4010: any): BatItem[] {
+  const items: BatItem[] = []
+  const allOps: any[] = (d3040?.clientes || []).flatMap((c: any) => c.operacoes || [])
+
+  // Contas do 4010 indexadas por codigoConta normalizado (10 dígitos)
+  const contaMap = new Map<string, number>()
+  ;(d4010?.contas || []).forEach((c: any) => {
+    const k = normalizaCosif(String(c.codigoConta || ''))
+    contaMap.set(k, (contaMap.get(k) || 0) + Number(c.saldo || 0))
+  })
+
+  // Busca por prefixo de dígitos: '16' = contas que começam com '16xxxxxxxx'
+  const saldo = (...prefixos: string[]): number =>
+    d4010
+      ? Array.from(contaMap.entries())
+          .filter(([k]) => prefixos.some(p => k.startsWith(normalizaCosif(p))))
+          .reduce((s, [, v]) => s + v, 0)
+      : 0
+
+  // Busca conta exata por 10 dígitos
+  const saldoExato = (...cosifs: string[]): number =>
+    d4010
+      ? cosifs.reduce((s, c) => s + (contaMap.get(normalizaCosif(c)) || 0), 0)
+      : 0
+
+  const vencAtivos = (v: any) => Object.keys(v || {}).some(k => {
+    const n = parseInt(k.replace('v', '')); return n >= 110 && n <= 290
+  })
+  const sumVenc110_290 = (o: any) => Object.entries(o.vencimentos || {}).reduce((s: number, [k, v]: [string, any]) => {
+    const n = parseInt(k.replace('v', '')); return (n >= 110 && n <= 290) ? s + Number(v) : s
+  }, 0)
+
+  const NATOPS = ['01', '02', '03', '04', '05', '06', '07']
+
+  const item = (regra: string, descricao: string, cosifDisplay: string, valor3040: number, cosifPrefixes: string[], exact = false): BatItem => {
+    const valor4010 = d4010 ? (exact ? saldoExato(...cosifPrefixes) : saldo(...cosifPrefixes)) : null
+    const diferenca = valor4010 !== null ? Math.abs(valor3040 - valor4010) : null
+    const tolerancia = Math.max(valor3040, valor4010 ?? 0) * 0.001
+    const status: BatItem['status'] = valor4010 === null ? 'sem4010'
+      : diferenca! <= tolerancia ? 'ok' : 'divergente'
+    return { regra, descricao, cosif: cosifDisplay, valor3040, valor4010, diferenca, status }
+  }
+
+  // ── T01 — Carteira Total de Crédito ──────────────────────────────────────────
+  const totalCarteira = allOps
+    .filter(o => NATOPS.includes(String(o.NatuOp || '')) && vencAtivos(o))
+    .reduce((s, o) => s + sumVenc110_290(o), 0)
+  items.push(item('T01', 'Carteira total de crédito (v110–v290)', '1.6.x / 1.8.x', totalCarteira, ['16', '18']))
+
+  // ── T06 — Crédito a Liberar ───────────────────────────────────────────────────
+  const credLiberar = allOps.reduce((s, o) => s + ['v20','v40','v60','v80'].reduce((ss, k) => ss + Number(o.vencimentos?.[k] || 0), 0), 0)
+  items.push(item('T06', 'Crédito a liberar / limites (v20+v40+v60+v80)', '3.0.9.80.00-4 + 3.0.9.86.00-8', credLiberar, ['3098000400', '3098600800'], true))
+
+  // ── M02 — Empréstimos ─────────────────────────────────────────────────────────
+  const vlrEmp = allOps.filter(o => String(o.Mod||'').startsWith('02') && NATOPS.includes(String(o.NatuOp||'')) && vencAtivos(o)).reduce((s, o) => s + sumVenc110_290(o), 0)
+  items.push(item('M02', 'Empréstimos (Mod 02xx, v110–v290)', '1.6.1.20.00-8', vlrEmp, ['1612000800'], true))
+
+  // ── MV — Cartão de Crédito ────────────────────────────────────────────────────
+  const vlrCartao = allOps.filter(o => o.Mod === '1304' && NATOPS.includes(String(o.NatuOp||'')) && vencAtivos(o)).reduce((s, o) => s + sumVenc110_290(o), 0)
+  items.push(item('MV', 'Cartão de crédito (Mod 1304, v110–v290)', '1.8.8.79.00-3', vlrCartao, ['1887900300'], true))
+
+  // ── P — Provisão Total ────────────────────────────────────────────────────────
+  const totalProv = allOps.filter(o => NATOPS.includes(String(o.NatuOp||''))).reduce((s, o) => s + Number(o.ProvConsttd || 0), 0)
+  items.push(item('P', 'Provisão total constituída (ProvConsttd)', '1.6.1.x + 1.6.2.x + 1.8.9.x', totalProv, ['161', '162', '189']))
+
+  // ── MB — VlrContBr Res.4966 ───────────────────────────────────────────────────
+  const vlrContBrTotal = allOps.reduce((s, o) => s + Number(o.ContInstFinRes4966?.VlrContBr || 0), 0)
+  items.push(item('MB', 'Valor contábil bruto (Res.4966 VlrContBr)', '1.6.x + 1.8.x (bruto)', vlrContBrTotal, ['16', '18']))
+
+  // ── R05 — Classe D ────────────────────────────────────────────────────────────
+  const vlrClassD = allOps.filter(o => o.ClassOp === 'D' && NATOPS.includes(String(o.NatuOp||'')) && vencAtivos(o)).reduce((s, o) => s + sumVenc110_290(o), 0)
+  items.push(item('R05', 'Carteira classe D (v110–v290)', '3.1.5.00.00-5', vlrClassD, ['3150000500'], true))
+
+  // ── T02 — Baixados como Prejuízo ≤12m ────────────────────────────────────────
+  const totalV310 = allOps.reduce((s, o) => s + Number(o.vencimentos?.v310 || 0), 0)
+  items.push(item('T02', 'Baixados como prejuízo ≤12m (v310)', '9.0.9.60.10-5', totalV310, ['9096010500'], true))
+
+  // ── T03 — Baixados 12–48m ─────────────────────────────────────────────────────
+  const totalV320 = allOps.reduce((s, o) => s + Number(o.vencimentos?.v320 || 0), 0)
+  items.push(item('T03', 'Baixados como prejuízo 12–48m (v320)', '9.0.9.60.15-0', totalV320, ['9096015000'], true))
+
+  // ── T04 — Baixados >48m ───────────────────────────────────────────────────────
+  const totalV330 = allOps.reduce((s, o) => s + Number(o.vencimentos?.v330 || 0), 0)
+  items.push(item('T04', 'Baixados como prejuízo >48m (v330)', '9.0.9.60.20-8', totalV330, ['9096020800'], true))
+
+  return items
+}
+
 // ─── Componente principal ──────────────────────────────────────────────────────
 export default function CadocsPage() {
   const [cadoc, setCadoc] = useState<CadocCode>('3044')
@@ -1014,6 +1165,8 @@ export default function CadocsPage() {
   const [nomeIF, setNomeIF]   = useState('')
   const [cnpjIF, setCnpjIF]   = useState('')
   const [importMode, setImportMode] = useState<'json'|'xml'>('json')
+  const [cadoc3040Data, setCadoc3040Data] = useState<any>(null)  // para batimento cruzado
+  const [cadoc4010Data, setCadoc4010Data] = useState<any>(null)  // para batimento cruzado
   const lvTimer = useRef<ReturnType<typeof setTimeout>|null>(null)
 
   // Carrega dados da IF das Configurações e pré-preenche o template
@@ -1083,6 +1236,10 @@ export default function CadocsPage() {
     setStep(3)
     setResTab(e.length > 0 ? 'erros' : 'preview')
 
+    // Armazena dados para batimento cruzado 3040 ↔ 4010
+    if (cadoc === '3040') setCadoc3040Data(obj)
+    if (cadoc === '4010') setCadoc4010Data(obj)
+
     const meta = cadoc === '3040' ? { cnpj: obj.cabecalho?.CNPJ||'?', dtBase: obj.cabecalho?.DtBase||'?' }
                : cadoc === '3044' ? { cnpj: obj.cnpjIF||'?', dtBase: (obj.dataHoraRemessa||'').slice(0,10) }
                : cadoc === '4010' ? { cnpj: obj.cabecalho?.cnpj||'?', dtBase: obj.cabecalho?.dataBase||'?' }
@@ -1117,6 +1274,54 @@ export default function CadocsPage() {
     const blob = new Blob(['\uFEFF'+rows.join('\n')], {type:'text/csv;charset=utf-8'})
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
     a.download = `criticas_${cadoc}.csv`; a.click(); URL.revokeObjectURL(a.href)
+  }
+
+  const exportCsvOperacoes = () => {
+    try {
+      const obj = JSON.parse(json)
+      const cab = obj.cabecalho || {}
+      const esc = (v: any) => {
+        const s = String(v ?? '')
+        return s.includes(';') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g,'""')}"` : s
+      }
+      const header = [
+        'CPF_CNPJ','Tipo_Cliente','ClassCli','PorteCli','FatAnual','IniRelactCli','Autorzc',
+        'IPOC','Contrt','Mod','NatuOp','OrigemRec','Indx','VarCamb','CEP',
+        'TaxEft','DtContr','DtVencOp','VlrContr','ClassOp','ProvConsttd','DiaAtraso',
+        'ClasAtFin','CartProvMin','VlrContBr','VlrPerdaAcum',
+        'Venc_v20','Venc_v40','Venc_v60','Venc_v80',
+        'Venc_v110','Venc_v120','Venc_v130','Venc_v140','Venc_v150','Venc_v160',
+        'Venc_v170','Venc_v180','Venc_v190','Venc_v200','Venc_v205','Venc_v210',
+        'Venc_v220','Venc_v230','Venc_v240','Venc_v250',
+        'Venc_v310','Venc_v320','Venc_v330',
+      ]
+      const vKeys = ['v20','v40','v60','v80','v110','v120','v130','v140','v150','v160',
+                     'v170','v180','v190','v200','v205','v210','v220','v230','v240','v250','v310','v320','v330']
+      const rows: string[] = ['\uFEFF' + header.join(';')]
+      ;(obj.clientes || []).forEach((c: any) => {
+        ;(c.operacoes || []).forEach((o: any) => {
+          const r4 = o.ContInstFinRes4966 || {}
+          const v  = o.vencimentos || {}
+          rows.push([
+            esc(c.Cd), esc(c.Tp==='1'?'PF':'PJ'), esc(c.ClassCli), esc(c.PorteCli),
+            esc(c.FatAnual), esc(c.IniRelactCli), esc(c.Autorzc),
+            esc(o.IPOC), esc(o.Contrt), esc(o.Mod), esc(o.NatuOp), esc(o.OrigemRec),
+            esc(o.Indx), esc(o.VarCamb), esc(o.CEP),
+            esc(o.TaxEft), esc(o.DtContr), esc(o.DtVencOp),
+            esc(o.VlrContr), esc(o.ClassOp), esc(o.ProvConsttd), esc(o.DiaAtraso||0),
+            esc(r4.ClasAtFin), esc(r4.CartProvMin), esc(r4.VlrContBr), esc(r4.VlrPerdaAcum),
+            ...vKeys.map(k => esc(v[k] ?? 0)),
+          ].join(';'))
+        })
+      })
+      const dtBase = cab.DtBase ? cab.DtBase.replace('-','') : 'export'
+      const cnpj   = cab.CNPJ || 'if'
+      const blob = new Blob([rows.join('\n')], {type:'text/csv;charset=utf-8'})
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `cadoc3040_${cnpj}_${dtBase}_operacoes.csv`
+      a.click(); URL.revokeObjectURL(a.href)
+    } catch { /* json inválido */ }
   }
 
   const meta = CADOCS_META[cadoc]
@@ -1550,9 +1755,15 @@ export default function CadocsPage() {
 
                     {/* Linha 5 — Tabela de clientes/operações */}
                     <div style={{padding:'14px 16px',borderBottom:'1px solid #f3f4f6'}}>
-                      <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:10,display:'flex',alignItems:'center',gap:6}}>
-                        <div style={{width:3,height:14,background:'#1d4ed8',borderRadius:2}}/>
-                        Clientes e Operações
+                      <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}}>
+                        <div style={{display:'flex',alignItems:'center',gap:6}}>
+                          <div style={{width:3,height:14,background:'#1d4ed8',borderRadius:2}}/>
+                          Clientes e Operações
+                          <span style={{fontSize:10,color:'#9ca3af',fontWeight:400}}>({totalOps} ops · {(obj.clientes||[]).length} clientes)</span>
+                        </div>
+                        <button onClick={exportCsvOperacoes} style={{display:'flex',alignItems:'center',gap:5,padding:'4px 11px',borderRadius:6,border:'1px solid #1d4ed830',background:'#eff6ff',cursor:'pointer',color:'#1d4ed8',fontSize:10.5,fontWeight:700,outline:'none',flexShrink:0}}>
+                          ⬇ Exportar CSV completo
+                        </button>
                       </div>
                       <div style={{borderRadius:8,border:'1px solid #e5e7eb',overflow:'hidden',maxHeight:220,overflowY:'auto'}}>
                         <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5}}>
@@ -1687,6 +1898,121 @@ export default function CadocsPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            )
+          })()}
+
+          {/* ── Dashboard Batimento Cruzado 3040 × 4010 ── */}
+          {(cadoc3040Data || cadoc4010Data) && (cadoc === '3040' || cadoc === '4010') && (() => {
+            const bat = calcBatimentoCruzado(cadoc3040Data, cadoc4010Data)
+            const has3040 = !!cadoc3040Data
+            const has4010 = !!cadoc4010Data
+            const divergentes = bat.filter(b => b.status === 'divergente').length
+            const oks         = bat.filter(b => b.status === 'ok').length
+            const sem4010     = bat.filter(b => b.status === 'sem4010').length
+            const fmtB = (v: number | null) => v === null ? '—' : v.toLocaleString('pt-BR', {minimumFractionDigits:2,maximumFractionDigits:2})
+            const statusCor = (s: string) => s==='ok'?'#16a34a':s==='divergente'?'#dc2626':'#9ca3af'
+            const statusLabel = (s: string) => s==='ok'?'✓ OK':s==='divergente'?'✗ Divergente':s==='sem4010'?'— Aguardando 4010':'ℹ Info'
+            return (
+              <div style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,overflow:'hidden',marginBottom:12}}>
+                {/* Header */}
+                <div style={{padding:'11px 16px',background:'linear-gradient(135deg,#1d4ed808,#0891b208)',borderBottom:'1px solid #e5e7eb',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:28,height:28,borderRadius:8,background:'linear-gradient(135deg,#1d4ed8,#0891b2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13}}>⇄</div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:800,color:'#111827'}}>Batimento Cruzado — CADOC 3040 × CADOC 4010</div>
+                      <div style={{fontSize:10,color:'#9ca3af',marginTop:1}}>
+                        Regras BCB SCR3040_RegrasValidacaoBacen — comparativo de valores SCR vs COSIF
+                      </div>
+                    </div>
+                  </div>
+                  {/* Status badges */}
+                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                    <div style={{padding:'3px 10px',borderRadius:5,background: has3040?'#eff6ff':'#f3f4f6',border:`1px solid ${has3040?'#bfdbfe':'#e5e7eb'}`,fontSize:10,fontWeight:700,color:has3040?'#1d4ed8':'#9ca3af'}}>
+                      3040 {has3040?'✓ carregado':'— não carregado'}
+                    </div>
+                    <div style={{padding:'3px 10px',borderRadius:5,background: has4010?'#eff6ff':'#f3f4f6',border:`1px solid ${has4010?'#bfdbfe':'#e5e7eb'}`,fontSize:10,fontWeight:700,color:has4010?'#0891b2':'#9ca3af'}}>
+                      4010 {has4010?'✓ carregado':'— não carregado'}
+                    </div>
+                    {!has4010 && (
+                      <span style={{fontSize:10,color:'#d97706',fontStyle:'italic'}}>
+                        ← Gere o CADOC 4010 para comparativo completo
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* KPIs */}
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',borderBottom:'1px solid #f3f4f6'}}>
+                  {[
+                    {label:'Regras verificadas', val: String(bat.length), color:'#374151'},
+                    {label:'OK / Dentro da tolerância', val: String(oks), color:'#16a34a'},
+                    {label:'Divergências encontradas', val: String(divergentes), color: divergentes>0?'#dc2626':'#9ca3af'},
+                  ].map(k=>(
+                    <div key={k.label} style={{padding:'12px 16px',textAlign:'center',borderRight:'1px solid #f3f4f6'}}>
+                      <div style={{fontSize:22,fontWeight:900,color:k.color,letterSpacing:'-1px'}}>{k.val}</div>
+                      <div style={{fontSize:9.5,color:'#9ca3af',fontWeight:600,textTransform:'uppercase',letterSpacing:'.4px',marginTop:4}}>{k.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Tabela de regras */}
+                <div style={{overflowX:'auto'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:11.5}}>
+                    <thead>
+                      <tr style={{background:'#f9fafb'}}>
+                        {['Regra','Descrição','Rubrica COSIF','Valor SCR 3040','Valor COSIF 4010','Diferença','Status'].map(h=>(
+                          <th key={h} style={{padding:'8px 12px',textAlign: h.includes('Valor')||h==='Diferença'?'right':'left',fontSize:9,fontWeight:700,color:'#9ca3af',letterSpacing:'.5px',textTransform:'uppercase',borderBottom:'1px solid #e5e7eb',whiteSpace:'nowrap'}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bat.map((b,i) => (
+                        <tr key={i} style={{borderTop:'1px solid #f9fafb',background: b.status==='divergente'?'#fef2f250':b.status==='ok'?'transparent':'transparent'}}
+                          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background=b.status==='divergente'?'#fef2f2':'#f9fafb'}
+                          onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background=b.status==='divergente'?'#fef2f250':'transparent'}>
+                          <td style={{padding:'9px 12px'}}>
+                            <span style={{fontFamily:'monospace',fontSize:11,fontWeight:800,color:'#0891b2'}}>{b.regra}</span>
+                          </td>
+                          <td style={{padding:'9px 12px',color:'#374151',fontSize:11.5,maxWidth:200}}>{b.descricao}</td>
+                          <td style={{padding:'9px 12px',fontFamily:'monospace',fontSize:10,color:'#9ca3af',whiteSpace:'nowrap'}}>{b.cosif}</td>
+                          <td style={{padding:'9px 12px',fontFamily:'monospace',fontSize:11.5,color:'#1d4ed8',textAlign:'right',whiteSpace:'nowrap'}}>
+                            {b.valor3040 === 0 ? <span style={{color:'#d1d5db'}}>R$ 0,00</span> : `R$ ${fmtB(b.valor3040)}`}
+                          </td>
+                          <td style={{padding:'9px 12px',fontFamily:'monospace',fontSize:11.5,color:'#0891b2',textAlign:'right',whiteSpace:'nowrap'}}>
+                            {b.valor4010 === null ? <span style={{color:'#d1d5db'}}>—</span> : `R$ ${fmtB(b.valor4010)}`}
+                          </td>
+                          <td style={{padding:'9px 12px',fontFamily:'monospace',fontSize:11.5,textAlign:'right',whiteSpace:'nowrap',fontWeight:b.status==='divergente'?700:400,color: b.diferenca===null?'#d1d5db':b.status==='ok'?'#16a34a':'#dc2626'}}>
+                            {b.diferenca === null ? '—' : b.diferenca === 0 ? '—' : `R$ ${fmtB(b.diferenca)}`}
+                          </td>
+                          <td style={{padding:'9px 12px'}}>
+                            <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:4,background:statusCor(b.status)+'15',color:statusCor(b.status),whiteSpace:'nowrap'}}>
+                              {statusLabel(b.status)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Footer informativo */}
+                <div style={{padding:'10px 16px',background:'#f9fafb',borderTop:'1px solid #f3f4f6',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+                  <span style={{fontSize:10,color:'#9ca3af'}}>
+                    Tolerância: 0,1% do maior valor entre SCR e COSIF · Baseado em SCR3040_RegrasValidacaoBacen_1.xls
+                  </span>
+                  <button onClick={() => {
+                    const bat2 = calcBatimentoCruzado(cadoc3040Data, cadoc4010Data)
+                    const esc = (v: any) => { const s = String(v??''); return s.includes(';')?`"${s}"`:s }
+                    const rows = ['\uFEFF' + ['Regra','Descrição','COSIF','SCR_3040','COSIF_4010','Diferença','Status'].join(';'),
+                      ...bat2.map(b => [esc(b.regra),esc(b.descricao),esc(b.cosif),esc(b.valor3040),esc(b.valor4010??''),esc(b.diferenca??''),esc(b.status)].join(';'))]
+                    const blob = new Blob([rows.join('\n')], {type:'text/csv;charset=utf-8'})
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+                    a.download = `batimento_3040x4010.csv`; a.click(); URL.revokeObjectURL(a.href)
+                  }} style={{fontSize:10.5,padding:'4px 12px',borderRadius:6,border:'1px solid #e5e7eb',background:'#fff',cursor:'pointer',color:'#374151',fontWeight:600,outline:'none'}}>
+                    ⬇ Exportar batimento CSV
+                  </button>
+                </div>
               </div>
             )
           })()}
