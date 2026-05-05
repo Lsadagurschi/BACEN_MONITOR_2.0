@@ -94,9 +94,32 @@ export default function NormasPage() {
   const [msgs, setMsgs]     = useState<{r:string;c:string}[]>([])
   const [inp, setInp]       = useState('')
   const [busy, setBusy]     = useState(false)
+  const [pagina, setPagina] = useState(1)
+  const [historico, setHistorico] = useState<Norma[]>([])
   const chatEl              = useRef<HTMLDivElement>(null)
+  const POR_PAGINA = 10
 
   const getKey = () => typeof window !== 'undefined' ? (localStorage.getItem('bm_api_key')||'') : ''
+
+  // Carrega histórico persistido do localStorage na montagem
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('bm_normas_historico')
+      if (saved) setHistorico(JSON.parse(saved))
+    } catch {}
+  }, [])
+
+  // Persiste histórico sempre que novas normas chegarem dos feeds
+  const mergeHistorico = useCallback((novas: Norma[]) => {
+    setHistorico(prev => {
+      const idsSeen = new Set(prev.map(n => n.id))
+      const adicionais = novas.filter(n => !idsSeen.has(n.id))
+      if (!adicionais.length) return prev
+      const merged = [...adicionais, ...prev].sort((a,b) => (b.data_pub||'').localeCompare(a.data_pub||''))
+      try { localStorage.setItem('bm_normas_historico', JSON.stringify(merged)) } catch {}
+      return merged
+    })
+  }, [])
 
   const fetchFeed = useCallback(async (feed: typeof FEEDS[0], a?: number) => {
     setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
@@ -116,24 +139,39 @@ export default function NormasPage() {
   const fetchAll = useCallback(() => FEEDS.forEach(f => fetchFeed(f)), [fetchFeed])
   useEffect(() => { fetchAll() }, [])
 
-  // monta normas a partir dos feeds
+  // monta normas a partir dos feeds + histórico persistido
   const allNormas: Norma[] = (() => {
     const seen = new Set<string>(); const out: Norma[] = []
     FEEDS.forEach(f => { feeds[f.id]?.items?.forEach(it => { const g=it.guid||it.link; if(!seen.has(g)){seen.add(g);out.push(toNorma(it))} }) })
     return out.sort((a,b) => (b.data_pub||'').localeCompare(a.data_pub||''))
   })()
 
+  // Quando novas normas chegam dos feeds, persiste no histórico
+  useEffect(() => {
+    if (allNormas.length) mergeHistorico(allNormas)
+  }, [allNormas.length])
+
+  // Fonte final: histórico (inclui feed atual + sessões anteriores)
+  const fonteNormas: Norma[] = historico.length ? historico : allNormas
+
   const isLoading = FEEDS.some(f => feeds[f.id]?.loading)
   const hasErr    = !isLoading && FEEDS.every(f => !feeds[f.id]?.items?.length)
 
-  let normas = [...allNormas]
+  let normas = [...fonteNormas]
   if (area !== 'all') normas = normas.filter(n => n.area === area)
   if (urgFilt)        normas = normas.filter(n => n.urgencia === urgFilt)
   if (tipos.length)   normas = normas.filter(n => tipos.includes(n.tipo))
   if (q) { const ql = q.toLowerCase(); normas = normas.filter(n => n.titulo.toLowerCase().includes(ql)||n.resumo.toLowerCase().includes(ql)) }
 
-  const urgCnt = allNormas.reduce((a,n) => ({...a,[n.urgencia]:(a[n.urgencia]||0)+1}), {} as Record<string,number>)
-  const tiposAll = [...new Set(allNormas.map(n=>n.tipo))]
+  const totalPaginas = Math.ceil(normas.length / POR_PAGINA)
+  const paginaAtual  = Math.min(pagina, totalPaginas || 1)
+  const normasPagina = normas.slice((paginaAtual - 1) * POR_PAGINA, paginaAtual * POR_PAGINA)
+
+  // Reset para pag 1 quando filtros mudam
+  useEffect(() => { setPagina(1) }, [area, urgFilt, q, tipos.length])
+
+  const urgCnt = fonteNormas.reduce((a,n) => ({...a,[n.urgencia]:(a[n.urgencia]||0)+1}), {} as Record<string,number>)
+  const tiposAll = [...new Set(fonteNormas.map(n=>n.tipo))]
 
   const toggleCard = (id: number) => setCards(p => ({...p,[id]:{...p[id],tab:'analise',open:!p[id]?.open}}))
   const setTab = (id: number, tab: 'analise'|'resumo') => setCards(p => ({...p,[id]:{...p[id],open:true,tab}}))
@@ -145,7 +183,7 @@ export default function NormasPage() {
     try {
       const r = await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST', headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:900,system:'Especialista sênior em regulação financeira BCB/CMN. Análises objetivas e práticas para IFs brasileiras.',messages:[{role:'user',content:`Analise a norma em 4 tópicos (máx 80 palavras cada):\n**1. O que muda** — impacto operacional\n**2. Quem é afetado** — tipos de IF e segmentos\n**3. CADOCs impactados** — documentos BCB afetados e campos específicos\n**4. Prazo e ação** — datas-limite e próximos passos\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1400,system:'Você é especialista sênior em regulação financeira BCB/CMN e no Sistema de Informações de Crédito (SCR). Conhece profundamente os leiautes XML dos CADOCs (3040, 4010, 3060, 6334, etc), campos obrigatórios, tamanhos, formatos e regras de validação. Forneça análises objetivas e práticas para IFs brasileiras.',messages:[{role:'user',content:`Analise a norma abaixo em 5 tópicos estruturados:\n\n**1. O que muda** (máx 80 palavras)\nImpacto operacional concreto para IFs.\n\n**2. Quem é afetado** (máx 60 palavras)\nTipos de IF, segmentos prudenciais (S1–S5) e áreas impactadas.\n\n**3. CADOCs e Campos Impactados**\nListe TODOS os CADOCs afetados. Para cada um:\n- CADOC (ex: CADOC 3040 — SCR)\n- Campos alterados/criados: nome do campo, tipo, tamanho máximo, se é obrigatório\n- Exemplo: ClassOp (string 2, obrigatório), VlrContr (decimal 18.2, obrigatório)\n\n**4. Exemplo de Alteração XML**\nMostre como o XML do CADOC deve ficar ANTES e DEPOIS da norma (trecho representativo com campos reais do leiaute BCB). Use o formato exato do XML do BCB.\n\n**5. Prazo e Ação** (máx 60 palavras)\nDatas-limite, vigência e próximos passos prioritários.\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})
       })
       const d = await r.json()
       setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:d.content?.[0]?.text||'Sem resposta'}}))
@@ -267,7 +305,7 @@ export default function NormasPage() {
                 {area==='all' ? 'Normas BCB/CMN Vigentes' : AREAS.find(a=>a.id===area)?.l}
               </h1>
               <span style={{ fontSize:11, color:'#9ca3af', fontFamily:'monospace' }}>
-                {isLoading ? 'Buscando feeds ao vivo em bcb.gov.br…' : `${normas.length} normas · feed ao vivo · ${ano}`}
+                {isLoading ? 'Buscando feeds ao vivo em bcb.gov.br…' : `${normas.length} normas no histórico · página ${paginaAtual}/${totalPaginas||1}`}
               </span>
             </div>
           </div>
@@ -304,8 +342,35 @@ export default function NormasPage() {
             </div>
           )}
 
-          {/* Cards de normas */}
-          {normas.map(n => {
+          {/* Barra de paginação topo */}
+          {normas.length > POR_PAGINA && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, padding:'6px 0' }}>
+              <span style={{ fontSize:11, color:'#9ca3af' }}>
+                Exibindo {(paginaAtual-1)*POR_PAGINA+1}–{Math.min(paginaAtual*POR_PAGINA,normas.length)} de {normas.length} normas
+              </span>
+              <div style={{ display:'flex', gap:4 }}>
+                <button onClick={()=>setPagina(1)} disabled={paginaAtual===1} style={{ padding:'3px 8px', borderRadius:5, border:'1px solid #e5e7eb', background:paginaAtual===1?'#f9fafb':'#fff', cursor:paginaAtual===1?'default':'pointer', fontSize:11, color:'#374151', outline:'none' }}>«</button>
+                <button onClick={()=>setPagina(p=>Math.max(1,p-1))} disabled={paginaAtual===1} style={{ padding:'3px 10px', borderRadius:5, border:'1px solid #e5e7eb', background:paginaAtual===1?'#f9fafb':'#fff', cursor:paginaAtual===1?'default':'pointer', fontSize:11, color:'#374151', outline:'none' }}>‹ Anterior</button>
+                {Array.from({length:Math.min(totalPaginas,7)},(_,i)=>{
+                  let pg = i+1
+                  if (totalPaginas > 7) {
+                    if (paginaAtual <= 4) pg = i+1
+                    else if (paginaAtual >= totalPaginas-3) pg = totalPaginas-6+i
+                    else pg = paginaAtual-3+i
+                  }
+                  return (
+                    <button key={pg} onClick={()=>setPagina(pg)} style={{ padding:'3px 9px', borderRadius:5, border:`1px solid ${pg===paginaAtual?G:'#e5e7eb'}`, background:pg===paginaAtual?G:'#fff', cursor:'pointer', fontSize:11, color:pg===paginaAtual?'#fff':'#374151', fontWeight:pg===paginaAtual?700:400, outline:'none' }}>{pg}</button>
+                  )
+                })}
+                <button onClick={()=>setPagina(p=>Math.min(totalPaginas,p+1))} disabled={paginaAtual===totalPaginas} style={{ padding:'3px 10px', borderRadius:5, border:'1px solid #e5e7eb', background:paginaAtual===totalPaginas?'#f9fafb':'#fff', cursor:paginaAtual===totalPaginas?'default':'pointer', fontSize:11, color:'#374151', outline:'none' }}>Próxima ›</button>
+                <button onClick={()=>setPagina(totalPaginas)} disabled={paginaAtual===totalPaginas} style={{ padding:'3px 8px', borderRadius:5, border:'1px solid #e5e7eb', background:paginaAtual===totalPaginas?'#f9fafb':'#fff', cursor:paginaAtual===totalPaginas?'default':'pointer', fontSize:11, color:'#374151', outline:'none' }}>»</button>
+              </div>
+              <button onClick={()=>{ if(confirm('Limpar todo o histórico de normas?')){ localStorage.removeItem('bm_normas_historico'); setHistorico([]) }}} style={{ fontSize:10, padding:'3px 9px', borderRadius:5, border:'1px solid #fee2e2', background:'#fff', color:'#dc2626', cursor:'pointer', outline:'none' }}>🗑 Limpar histórico</button>
+            </div>
+          )}
+
+          {/* Cards de normas — página atual */}
+          {normasPagina.map(n => {
             const cs = cards[n.id] || { open:false, tab:'analise' as const }
             const cor = TIPO_COR[n.tipo] || '#6b7280'
             const urgCor = n.urgencia==='critica'?'#dc2626':n.urgencia==='alta'?'#d97706':G
@@ -377,6 +442,15 @@ export default function NormasPage() {
               </div>
             )
           })}
+
+          {/* Paginação rodapé */}
+          {normas.length > POR_PAGINA && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'16px 0 8px' }}>
+              <button onClick={()=>setPagina(p=>Math.max(1,p-1))} disabled={paginaAtual===1} style={{ padding:'5px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:paginaAtual===1?'#f9fafb':'#fff', cursor:paginaAtual===1?'default':'pointer', fontSize:12, color:'#374151', outline:'none' }}>‹ Anterior</button>
+              <span style={{ fontSize:12, color:'#6b7280' }}>Página {paginaAtual} de {totalPaginas}</span>
+              <button onClick={()=>setPagina(p=>Math.min(totalPaginas,p+1))} disabled={paginaAtual===totalPaginas} style={{ padding:'5px 14px', borderRadius:7, border:'1px solid #e5e7eb', background:paginaAtual===totalPaginas?'#f9fafb':'#fff', cursor:paginaAtual===totalPaginas?'default':'pointer', fontSize:12, color:'#374151', outline:'none' }}>Próxima ›</button>
+            </div>
+          )}
         </div>
       </div>
 
