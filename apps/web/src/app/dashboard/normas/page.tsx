@@ -132,71 +132,69 @@ export default function NormasPage() {
     })
   }, [])
 
-  const fetchFeed = useCallback(async (feed: typeof FEEDS[0], a?: number) => {
-    setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
-    const anoBase = a || ano
-    const anos = feed.supAno
-      ? [anoBase, anoBase-1, anoBase-2, anoBase-3, anoBase-4]
-      : [anoBase]
+  // Busca um feed para UM ano específico — retorna os itens
+  const fetchFeedAno = useCallback(async (feed: typeof FEEDS[0], yr: number): Promise<RssItem[]> => {
+    const url = feed.supAno ? `${feed.url}?ano=${yr}` : feed.url
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 14000)
+    try {
+      const r = await fetch(url, { signal:ctrl.signal, headers:{Accept:'application/json,application/atom+xml,application/rss+xml,*/*'} })
+      clearTimeout(timer)
+      if (!r.ok) return []
+      const ct = r.headers.get('content-type') || ''
+      if (ct.includes('json')) {
+        const json = await r.json()
+        try {
+          const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any)=>h._source) || []
+          return items.map((it:any) => ({
+            titulo:    it.titulo || it.title || it.identifica || '',
+            link:      it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url||it.link||''),
+            descricao: (it.ementa||it.subTitulo||it.description||'').slice(0,300),
+            data:      it.pubDate||it.data||it.dataPublicacao||'',
+            guid:      it.id||it.urlTitle||it.link||String(Math.random()),
+          }))
+        } catch { return [] }
+      }
+      return parseXML(await r.text())
+    } catch { clearTimeout(timer); return [] }
+  }, [])
 
-    // Parser específico para resposta JSON do DOU
-    const parseDOU = (json: any): RssItem[] => {
-      try {
-        const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any)=>h._source) || []
-        return items.map((it:any) => ({
-          titulo: it.titulo || it.title || it.identifica || '',
-          link:   it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url || it.link || ''),
-          descricao: (it.ementa || it.subTitulo || it.description || '').slice(0,300),
-          data:   it.pubDate || it.data || it.dataPublicacao || '',
-          guid:   it.id || it.urlTitle || it.link || Math.random().toString(),
-        }))
-      } catch { return [] }
-    }
+  // Busca todos os anos de um feed em paralelo e consolida
+  const fetchFeed = useCallback(async (feed: typeof FEEDS[0], anoRef: number) => {
+    setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
+    // BCB retorna ~10 por ano → buscamos os últimos 5 anos em paralelo
+    const anos = feed.supAno
+      ? [anoRef, anoRef-1, anoRef-2, anoRef-3, anoRef-4]
+      : [anoRef]
 
     try {
-      const resultados = await Promise.allSettled(
-        anos.map(async (yr) => {
-          const url = feed.supAno ? `${feed.url}?ano=${yr}` : feed.url
-          const ctrl = new AbortController()
-          const timer = setTimeout(() => ctrl.abort(), 14000)
-          try {
-            const r = await fetch(url, {
-              signal: ctrl.signal,
-              headers: { Accept: 'application/json,application/atom+xml,application/rss+xml,*/*' }
-            })
-            clearTimeout(timer)
-            if (!r.ok) return []
-            const ct = r.headers.get('content-type') || ''
-            if (ct.includes('json')) {
-              const json = await r.json()
-              return parseDOU(json)
-            }
-            return parseXML(await r.text())
-          } catch { clearTimeout(timer); return [] }
-        })
-      )
-
+      const resultados = await Promise.allSettled(anos.map(yr => fetchFeedAno(feed, yr)))
       const seen = new Set<string>()
       const allItems: RssItem[] = []
       resultados.forEach(res => {
-        if (res.status === 'fulfilled') {
-          res.value.forEach(item => {
-            if (!item.titulo) return
-            const k = item.guid || item.link
-            if (k && !seen.has(k)) { seen.add(k); allItems.push(item) }
-          })
-        }
+        if (res.status === 'fulfilled') res.value.forEach(item => {
+          if (!item.titulo) return
+          const k = item.guid || item.link
+          if (k && !seen.has(k)) { seen.add(k); allItems.push(item) }
+        })
       })
-
       allItems.sort((a,b) => (b.data||'').localeCompare(a.data||''))
-      setFeeds(prev => ({...prev,[feed.id]:{items:allItems,loading:false,error:allItems.length?'':'Feed indisponível (CORS/sandbox)'}}))
+      setFeeds(prev => ({...prev,[feed.id]:{items:allItems,loading:false,error:allItems.length?'':'Feed indisponível'}}))
     } catch(e:any) {
       setFeeds(prev => ({...prev,[feed.id]:{items:[],loading:false,error:'Erro: '+e.message}}))
     }
-  }, [ano])
+  }, [fetchFeedAno])
 
-  const fetchAll = useCallback(() => FEEDS.forEach(f => fetchFeed(f)), [fetchFeed])
-  useEffect(() => { fetchAll() }, [])
+  // Busca todos os feeds passando o ano explicitamente (evita closure stale)
+  const fetchAll = useCallback((anoRef: number) => {
+    FEEDS.forEach(f => fetchFeed(f, anoRef))
+  }, [fetchFeed])
+
+  // Busca inicial
+  useEffect(() => { fetchAll(ano) }, [])
+
+  // Rebusca quando o ano muda
+  useEffect(() => { fetchAll(ano) }, [ano])
 
   // monta normas a partir dos feeds + histórico persistido
   const allNormas: Norma[] = (() => {
@@ -240,71 +238,100 @@ export default function NormasPage() {
     if (!k) { alert('Configure sua API key em Configurações para usar a análise por IA.'); return }
     setCards(p => ({...p,[n.id]:{...p[n.id],open:true,tab:'analise',loading:true}}))
     try {
-      // Tenta buscar o conteúdo real do documento via proxy Anthropic
+      // Busca o conteúdo real usando web_search como tool e processa a resposta corretamente
       let conteudoDoc = ''
       if (n.url) {
         try {
-          const proxy = await fetch(`https://api.anthropic.com/v1/messages`, {
+          const r1 = await fetch('https://api.anthropic.com/v1/messages', {
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
             body: JSON.stringify({
-              model:'claude-sonnet-4-6', max_tokens:800,
-              system:'Você é um web scraper. Acesse a URL fornecida e retorne o texto principal do documento regulatório (máx 1500 chars). Retorne APENAS o texto, sem formatação.',
-              messages:[{role:'user',content:`Acesse e extraia o texto principal deste documento regulatório: ${n.url}\n\nRetorne o conteúdo textual do ato normativo (ementa, artigos principais). Máx 1500 caracteres.`}],
-              tools:[{type:'web_search_20250305',name:'web_search'}]
+              model:'claude-sonnet-4-6', max_tokens:1000,
+              system:'Acesse a URL e extraia o texto do ato normativo. Retorne APENAS o texto extraído, em português.',
+              messages:[{role:'user',content:`Acesse este link e retorne o texto do ato normativo (ementa e artigos principais, máx 1200 chars):\n${n.url}`}],
+              tools:[{type:'web_search_20250305', name:'web_search'}],
+              tool_choice:{type:'auto'},
             })
           })
-          const pd = await proxy.json()
-          const textos = (pd.content||[]).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join(' ')
-          if (textos.length > 100) conteudoDoc = textos.slice(0,1500)
-        } catch { /* ignora erro na busca de conteúdo */ }
+          const d1 = await r1.json()
+          // Processa todos os blocos — pode vir text, tool_use ou tool_result
+          const blocos = d1.content || []
+          // Se stop_reason=tool_use, precisa de mais uma rodada
+          if (d1.stop_reason === 'tool_use') {
+            const toolResults = blocos
+              .filter((b:any) => b.type === 'tool_use')
+              .map((b:any) => ({ type:'tool_result', tool_use_id: b.id, content: '' }))
+            const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+              method:'POST',
+              headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+              body: JSON.stringify({
+                model:'claude-sonnet-4-6', max_tokens:1000,
+                system:'Acesse a URL e extraia o texto do ato normativo. Retorne APENAS o texto extraído.',
+                messages:[
+                  {role:'user',content:`Acesse este link e retorne o texto do ato normativo:\n${n.url}`},
+                  {role:'assistant',content: blocos},
+                  {role:'user', content: toolResults},
+                ],
+                tools:[{type:'web_search_20250305', name:'web_search'}],
+              })
+            })
+            const d2 = await r2.json()
+            conteudoDoc = (d2.content||[]).filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('\n').slice(0,1500)
+          } else {
+            conteudoDoc = blocos.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('\n').slice(0,1500)
+          }
+        } catch { /* ignora — analisa só com os metadados */ }
       }
 
-      const contextoDoc = conteudoDoc
-        ? `\n\nCONTEÚDO REAL DO DOCUMENTO (extraído da fonte ${n.fonte}):\n${conteudoDoc}`
-        : `\n\nNota: conteúdo completo disponível em: ${n.url}`
+      const contextoDoc = conteudoDoc && conteudoDoc.length > 80
+        ? `\n\n📄 CONTEÚDO EXTRAÍDO DA FONTE (${n.fonte}):\n${conteudoDoc}`
+        : `\n\nLink da norma: ${n.url || 'não disponível'}`
 
       const r = await fetch('https://api.anthropic.com/v1/messages',{
         method:'POST',
         headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1600,
-          system:'Você é especialista sênior em regulação financeira BCB/CMN e no Sistema de Informações de Crédito (SCR). Conhece profundamente os leiautes XML dos CADOCs (3040, 4010, 3060, 6334, etc), campos obrigatórios, tamanhos, formatos e regras de validação do BCB. Forneça análises objetivas e práticas para compliance de IFs brasileiras.',
-          messages:[{role:'user',content:`Analise o ato normativo abaixo em 5 tópicos estruturados:
+        body:JSON.stringify({
+          model:'claude-sonnet-4-6', max_tokens:1600,
+          system:'Você é especialista sênior em regulação financeira BCB/CMN e no Sistema de Informações de Crédito (SCR). Conhece profundamente os leiautes XML dos CADOCs (3040, 4010, 3060, 6334 etc), campos obrigatórios, tamanhos e regras de validação BCB. Forneça análises objetivas e práticas para compliance de IFs brasileiras.',
+          messages:[{role:'user',content:`Analise o ato normativo abaixo em 5 tópicos:
 
-**1. O que muda** (máx 80 palavras)
-Impacto operacional concreto para IFs — o que precisam fazer diferente.
+**1. O que muda**
+Impacto operacional concreto para IFs (máx 80 palavras).
 
-**2. Quem é afetado** (máx 60 palavras)
-Tipos de IF, segmentos prudenciais (S1–S5) e áreas impactadas.
+**2. Quem é afetado**
+Tipos de IF, segmentos S1–S5 e áreas impactadas (máx 60 palavras).
 
 **3. CADOCs e Campos Impactados**
-Liste TODOS os CADOCs afetados. Para cada um informe:
-- CADOC e nome (ex: CADOC 3040 — SCR Crédito)
-- Campos alterados/criados: nome | tipo | tamanho | obrigatório
-- Exemplo: ClassOp | string | 2 chars | obrigatório
+Liste cada CADOC afetado com:
+- CADOC e nome completo
+- Campos: nome | tipo | tamanho | obrigatório
+Exemplo: ClassOp | string | 2 | obrigatório
 
-**4. Exemplo de Alteração XML**
-Mostre um trecho XML ANTES e DEPOIS da norma, usando o formato real do BCB:
+**4. Exemplo XML ANTES/DEPOIS**
+Trecho representativo no formato real do BCB:
 \`\`\`xml
 <!-- ANTES -->
-<Op IPOC="..." Mod="..." ClassOp="A" .../>
+<Op Mod="..." ClassOp="A" VlrContr="1000.00"/>
 
-<!-- DEPOIS (com novo campo/regra) -->
-<Op IPOC="..." Mod="..." ClassOp="A" NovoAtributo="X" .../>
+<!-- DEPOIS -->
+<Op Mod="..." ClassOp="A" VlrContr="1000.00" NovoCampo="X"/>
 \`\`\`
 
-**5. Prazo e Ação** (máx 60 palavras)
-Data de vigência, prazo para adequação e próximos passos prioritários.
+**5. Prazo e Ação**
+Vigência, prazo e próximos passos prioritários (máx 60 palavras).
 
 ---
-Fonte: ${n.fonte}
+Fonte: ${n.fonte} | Tipo: ${n.tipo} | Data: ${n.data_pub}
 Norma: ${n.titulo}
-Tipo: ${n.tipo} | Data: ${n.data_pub}
-Resumo: ${n.resumo}${contextoDoc}`}]})
+Resumo: ${n.resumo}${contextoDoc}`}]
+        })
       })
       const d = await r.json()
-      setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:d.content?.[0]?.text||'Sem resposta'}}))
-    } catch(e:any) { setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:'Erro: '+e.message}})) }
+      const texto = (d.content||[]).filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('\n')
+      setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:texto || `⚠️ API retornou: ${d.error?.message||d.stop_reason||JSON.stringify(d).slice(0,120)}`}}))
+    } catch(e:any) {
+      setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:'❌ Erro: '+e.message}}))
+    }
   }
 
   const send = async () => {
