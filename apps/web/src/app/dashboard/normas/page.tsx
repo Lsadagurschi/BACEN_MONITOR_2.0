@@ -3,15 +3,26 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 
 // ─── tipos ───────────────────────────────────────────────────────────────────
 interface RssItem { titulo:string; link:string; descricao:string; data:string; guid:string }
-interface Norma { id:number; tipo:string; numero:string; titulo:string; resumo:string; data_pub:string; area:string; urgencia:string; url:string }
+interface Norma { id:number; tipo:string; numero:string; titulo:string; resumo:string; data_pub:string; area:string; urgencia:string; url:string; fonte:string }
 interface CardSt { open:boolean; tab:'analise'|'resumo'; analise?:string; loading?:boolean }
 
 // ─── feeds BCB ───────────────────────────────────────────────────────────────
+// Fonte: BCB (3 feeds), DOU seção 1, CVM, SUSEP, Congresso, CMN
 const FEEDS = [
-  { id:'normativos',       url:'https://www.bcb.gov.br/api/feed/app/normativos/normativos',       supAno:true },
-  { id:'demaisnormativos', url:'https://www.bcb.gov.br/api/feed/app/normativos/demaisnormativos', supAno:true },
-  { id:'cartascirculares', url:'https://www.bcb.gov.br/api/feed/app/normativos/cartascirculares', supAno:true },
+  { id:'bcb_normativos',   url:'https://www.bcb.gov.br/api/feed/app/normativos/normativos',       supAno:true,  fonte:'BCB',    label:'Normativos BCB'   },
+  { id:'bcb_demais',       url:'https://www.bcb.gov.br/api/feed/app/normativos/demaisnormativos', supAno:true,  fonte:'BCB',    label:'Demais Normativos' },
+  { id:'bcb_cartas',       url:'https://www.bcb.gov.br/api/feed/app/normativos/cartascirculares', supAno:true,  fonte:'BCB',    label:'Cartas Circulares' },
+  { id:'dou_s1',           url:'https://www.in.gov.br/servicos/dou-consumidor/filtrar?termo=banco+central&secao=DO1&edicaoPadrao=false&tipoAto=RESOLUCAO,INSTRUCAO_NORMATIVA,CIRCULAR&formato=JSON', supAno:false, fonte:'DOU',    label:'Diário Oficial'   },
+  { id:'cvm',              url:'https://www.gov.br/cvm/pt-br/assuntos/noticias/RSS',               supAno:false, fonte:'CVM',    label:'CVM'              },
+  { id:'susep',            url:'https://www.gov.br/susep/pt-br/assuntos/noticias/RSS',             supAno:false, fonte:'SUSEP',  label:'SUSEP'            },
+  { id:'senado',           url:'https://www25.senado.leg.br/web/atividade/materias/-/materia/rss/atualNormas',   supAno:false, fonte:'Senado', label:'Senado Federal'   },
+  { id:'planalto',         url:'https://legislacao.planalto.gov.br/legislacao.nsf/Viw_Identificacao/lei%2014.478-2022?OpenDocument', supAno:false, fonte:'Planalto', label:'Planalto' },
 ]
+
+const FONTES_COR: Record<string,string> = {
+  'BCB':'#0d6e52', 'DOU':'#1648A0', 'CVM':'#7c3aed',
+  'SUSEP':'#b45309', 'Senado':'#c0392b', 'Planalto':'#374151',
+}
 
 const AREAS = [
   { id:'all',       l:'Todas',            ico:'◈' },
@@ -51,7 +62,7 @@ function parseXML(xml: string): RssItem[] {
 // ─── mapeador RSS → Norma ─────────────────────────────────────────────────────
 let _nextId = 1000
 const _ids: Record<string,number> = {}
-function toNorma(it: RssItem): Norma {
+function toNorma(it: RssItem, fonte = 'BCB'): Norma {
   const t = it.titulo
   let tipo = 'Normativo BCB'
   if (/Resolu[çc][ãa]o CMN/i.test(t))       tipo = 'Resolução CMN'
@@ -74,7 +85,7 @@ function toNorma(it: RssItem): Norma {
   const rawId = it.guid || it.link
   if (!_ids[rawId]) _ids[rawId] = _nextId++
   const num = t.match(/[Nn][ºo°]?\s*(\d+)/)?.[1] || ''
-  return { id:_ids[rawId], tipo, numero:num, titulo:t.replace(/^BC\s*-\s*/,'').trim(), resumo:it.descricao, data_pub:(it.data||'').slice(0,10), area, urgencia, url:it.link }
+  return { id:_ids[rawId], tipo, numero:num, titulo:t.replace(/^BC\s*-\s*/,'').trim(), resumo:it.descricao, data_pub:(it.data||'').slice(0,10), area, urgencia, url:it.link, fonte }
 }
 
 function fmtData(d: string) {
@@ -123,16 +134,64 @@ export default function NormasPage() {
 
   const fetchFeed = useCallback(async (feed: typeof FEEDS[0], a?: number) => {
     setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
-    const url = feed.supAno ? `${feed.url}?ano=${a||ano}` : feed.url
-    const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 12000)
+    const anoBase = a || ano
+    const anos = feed.supAno
+      ? [anoBase, anoBase-1, anoBase-2, anoBase-3, anoBase-4]
+      : [anoBase]
+
+    // Parser específico para resposta JSON do DOU
+    const parseDOU = (json: any): RssItem[] => {
+      try {
+        const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any)=>h._source) || []
+        return items.map((it:any) => ({
+          titulo: it.titulo || it.title || it.identifica || '',
+          link:   it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url || it.link || ''),
+          descricao: (it.ementa || it.subTitulo || it.description || '').slice(0,300),
+          data:   it.pubDate || it.data || it.dataPublicacao || '',
+          guid:   it.id || it.urlTitle || it.link || Math.random().toString(),
+        }))
+      } catch { return [] }
+    }
+
     try {
-      const r = await fetch(url, { signal:ctrl.signal, headers:{Accept:'application/atom+xml,*/*'} })
-      clearTimeout(timer)
-      if (r.ok) { const txt = await r.text(); const items = parseXML(txt); setFeeds(prev=>({...prev,[feed.id]:{items,loading:false,error:items.length?'':'Feed vazio'}})) }
-      else setFeeds(prev=>({...prev,[feed.id]:{items:[],loading:false,error:`HTTP ${r.status}`}}))
+      const resultados = await Promise.allSettled(
+        anos.map(async (yr) => {
+          const url = feed.supAno ? `${feed.url}?ano=${yr}` : feed.url
+          const ctrl = new AbortController()
+          const timer = setTimeout(() => ctrl.abort(), 14000)
+          try {
+            const r = await fetch(url, {
+              signal: ctrl.signal,
+              headers: { Accept: 'application/json,application/atom+xml,application/rss+xml,*/*' }
+            })
+            clearTimeout(timer)
+            if (!r.ok) return []
+            const ct = r.headers.get('content-type') || ''
+            if (ct.includes('json')) {
+              const json = await r.json()
+              return parseDOU(json)
+            }
+            return parseXML(await r.text())
+          } catch { clearTimeout(timer); return [] }
+        })
+      )
+
+      const seen = new Set<string>()
+      const allItems: RssItem[] = []
+      resultados.forEach(res => {
+        if (res.status === 'fulfilled') {
+          res.value.forEach(item => {
+            if (!item.titulo) return
+            const k = item.guid || item.link
+            if (k && !seen.has(k)) { seen.add(k); allItems.push(item) }
+          })
+        }
+      })
+
+      allItems.sort((a,b) => (b.data||'').localeCompare(a.data||''))
+      setFeeds(prev => ({...prev,[feed.id]:{items:allItems,loading:false,error:allItems.length?'':'Feed indisponível (CORS/sandbox)'}}))
     } catch(e:any) {
-      clearTimeout(timer)
-      setFeeds(prev=>({...prev,[feed.id]:{items:[],loading:false,error:e.name==='AbortError'?'Timeout':'Bloqueado pelo sandbox — abra localmente'}}))
+      setFeeds(prev => ({...prev,[feed.id]:{items:[],loading:false,error:'Erro: '+e.message}}))
     }
   }, [ano])
 
@@ -142,7 +201,7 @@ export default function NormasPage() {
   // monta normas a partir dos feeds + histórico persistido
   const allNormas: Norma[] = (() => {
     const seen = new Set<string>(); const out: Norma[] = []
-    FEEDS.forEach(f => { feeds[f.id]?.items?.forEach(it => { const g=it.guid||it.link; if(!seen.has(g)){seen.add(g);out.push(toNorma(it))} }) })
+    FEEDS.forEach(f => { feeds[f.id]?.items?.forEach(it => { const g=it.guid||it.link; if(!seen.has(g)){seen.add(g);out.push(toNorma(it, f.fonte))} }) })
     return out.sort((a,b) => (b.data_pub||'').localeCompare(a.data_pub||''))
   })()
 
@@ -181,9 +240,67 @@ export default function NormasPage() {
     if (!k) { alert('Configure sua API key em Configurações para usar a análise por IA.'); return }
     setCards(p => ({...p,[n.id]:{...p[n.id],open:true,tab:'analise',loading:true}}))
     try {
+      // Tenta buscar o conteúdo real do documento via proxy Anthropic
+      let conteudoDoc = ''
+      if (n.url) {
+        try {
+          const proxy = await fetch(`https://api.anthropic.com/v1/messages`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+            body: JSON.stringify({
+              model:'claude-sonnet-4-6', max_tokens:800,
+              system:'Você é um web scraper. Acesse a URL fornecida e retorne o texto principal do documento regulatório (máx 1500 chars). Retorne APENAS o texto, sem formatação.',
+              messages:[{role:'user',content:`Acesse e extraia o texto principal deste documento regulatório: ${n.url}\n\nRetorne o conteúdo textual do ato normativo (ementa, artigos principais). Máx 1500 caracteres.`}],
+              tools:[{type:'web_search_20250305',name:'web_search'}]
+            })
+          })
+          const pd = await proxy.json()
+          const textos = (pd.content||[]).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join(' ')
+          if (textos.length > 100) conteudoDoc = textos.slice(0,1500)
+        } catch { /* ignora erro na busca de conteúdo */ }
+      }
+
+      const contextoDoc = conteudoDoc
+        ? `\n\nCONTEÚDO REAL DO DOCUMENTO (extraído da fonte ${n.fonte}):\n${conteudoDoc}`
+        : `\n\nNota: conteúdo completo disponível em: ${n.url}`
+
       const r = await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST', headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1400,system:'Você é especialista sênior em regulação financeira BCB/CMN e no Sistema de Informações de Crédito (SCR). Conhece profundamente os leiautes XML dos CADOCs (3040, 4010, 3060, 6334, etc), campos obrigatórios, tamanhos, formatos e regras de validação. Forneça análises objetivas e práticas para IFs brasileiras.',messages:[{role:'user',content:`Analise a norma abaixo em 5 tópicos estruturados:\n\n**1. O que muda** (máx 80 palavras)\nImpacto operacional concreto para IFs.\n\n**2. Quem é afetado** (máx 60 palavras)\nTipos de IF, segmentos prudenciais (S1–S5) e áreas impactadas.\n\n**3. CADOCs e Campos Impactados**\nListe TODOS os CADOCs afetados. Para cada um:\n- CADOC (ex: CADOC 3040 — SCR)\n- Campos alterados/criados: nome do campo, tipo, tamanho máximo, se é obrigatório\n- Exemplo: ClassOp (string 2, obrigatório), VlrContr (decimal 18.2, obrigatório)\n\n**4. Exemplo de Alteração XML**\nMostre como o XML do CADOC deve ficar ANTES e DEPOIS da norma (trecho representativo com campos reais do leiaute BCB). Use o formato exato do XML do BCB.\n\n**5. Prazo e Ação** (máx 60 palavras)\nDatas-limite, vigência e próximos passos prioritários.\n\nNorma: ${n.titulo}\nTipo: ${n.tipo} | Data: ${n.data_pub}\nResumo: ${n.resumo}`}]})
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':k,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1600,
+          system:'Você é especialista sênior em regulação financeira BCB/CMN e no Sistema de Informações de Crédito (SCR). Conhece profundamente os leiautes XML dos CADOCs (3040, 4010, 3060, 6334, etc), campos obrigatórios, tamanhos, formatos e regras de validação do BCB. Forneça análises objetivas e práticas para compliance de IFs brasileiras.',
+          messages:[{role:'user',content:`Analise o ato normativo abaixo em 5 tópicos estruturados:
+
+**1. O que muda** (máx 80 palavras)
+Impacto operacional concreto para IFs — o que precisam fazer diferente.
+
+**2. Quem é afetado** (máx 60 palavras)
+Tipos de IF, segmentos prudenciais (S1–S5) e áreas impactadas.
+
+**3. CADOCs e Campos Impactados**
+Liste TODOS os CADOCs afetados. Para cada um informe:
+- CADOC e nome (ex: CADOC 3040 — SCR Crédito)
+- Campos alterados/criados: nome | tipo | tamanho | obrigatório
+- Exemplo: ClassOp | string | 2 chars | obrigatório
+
+**4. Exemplo de Alteração XML**
+Mostre um trecho XML ANTES e DEPOIS da norma, usando o formato real do BCB:
+\`\`\`xml
+<!-- ANTES -->
+<Op IPOC="..." Mod="..." ClassOp="A" .../>
+
+<!-- DEPOIS (com novo campo/regra) -->
+<Op IPOC="..." Mod="..." ClassOp="A" NovoAtributo="X" .../>
+\`\`\`
+
+**5. Prazo e Ação** (máx 60 palavras)
+Data de vigência, prazo para adequação e próximos passos prioritários.
+
+---
+Fonte: ${n.fonte}
+Norma: ${n.titulo}
+Tipo: ${n.tipo} | Data: ${n.data_pub}
+Resumo: ${n.resumo}${contextoDoc}`}]})
       })
       const d = await r.json()
       setCards(p => ({...p,[n.id]:{...p[n.id],loading:false,analise:d.content?.[0]?.text||'Sem resposta'}}))
@@ -266,7 +383,7 @@ export default function NormasPage() {
         <div style={{ padding:'10px 14px', borderTop:'1px solid #f3f4f6', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <div style={{ width:5, height:5, borderRadius:'50%', background:isLoading?'#d97706':hasErr?'#dc2626':G, flexShrink:0 }}/>
-            <span style={{ fontSize:9.5, color:'#9ca3af', fontFamily:'monospace' }}>{isLoading?'Carregando…':hasErr?'Indisponível':`${allNormas.length} normas · ${ano}`}</span>
+            <span style={{ fontSize:9.5, color:'#9ca3af', fontFamily:'monospace' }}>{isLoading?'Carregando…':hasErr?'Indisponível':`${fonteNormas.length} normas · ${ano}`}</span>
           </div>
         </div>
       </div>
@@ -384,6 +501,14 @@ export default function NormasPage() {
                     <span style={{ padding:'2px 8px', borderRadius:4, fontSize:9.5, fontWeight:700, background:cor+'15', color:cor, border:`1px solid ${cor}35` }}>{n.tipo}</span>
                     {n.data_pub && <span style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>📅 {fmtData(n.data_pub)}</span>}
                     {n.numero && <span style={{ fontSize:10, color:'#9ca3af', fontFamily:'monospace' }}>#{n.numero}</span>}
+                    {n.fonte && n.fonte !== 'BCB' && (
+                      <span style={{ fontSize:9, fontWeight:700, padding:'1px 6px', borderRadius:3,
+                        background: (FONTES_COR as any)[n.fonte]+'15',
+                        color: (FONTES_COR as any)[n.fonte] || '#6b7280',
+                        border:`1px solid ${(FONTES_COR as any)[n.fonte] || '#6b7280'}30` }}>
+                        {n.fonte}
+                      </span>
+                    )}
                     <span style={{ fontSize:9.5, fontWeight:700, padding:'2px 8px', borderRadius:4, color:urgCor, background:urgCor+'12', border:`1px solid ${urgCor}30`, fontFamily:'monospace' }}>
                       {n.urgencia==='critica'?'⚠ CRÍTICA':n.urgencia==='alta'?'↑ ALTA':'● NORMAL'}
                     </span>
