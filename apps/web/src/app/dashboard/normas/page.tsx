@@ -426,7 +426,7 @@ Resumo: ${n.resumo}${contextoDoc}`}]
             <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar normas, CADOCs, temas regulatórios…" style={{ flex:1, border:'none', outline:'none', background:'transparent', fontSize:13, color:'#111827', fontFamily:'inherit' }}/>
             {q && <span onClick={()=>setQ('')} style={{ cursor:'pointer', color:'#9ca3af', fontSize:12 }}>✕</span>}
           </div>
-          <button onClick={fetchAll} disabled={isLoading} style={{ padding:'8px 14px', borderRadius:8, border:'1px solid #e5e7eb', background:'#fff', cursor:isLoading?'default':'pointer', fontSize:12, fontWeight:600, color:'#374151', outline:'none', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+          <button onClick={() => fetchAll(ano)} disabled={isLoading} style={{ padding:'8px 14px', borderRadius:8, border:'1px solid #e5e7eb', background:'#fff', cursor:isLoading?'default':'pointer', fontSize:12, fontWeight:600, color:'#374151', outline:'none', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
             {isLoading ? <>⏳ Carregando…</> : <>↻ Atualizar Feed</>}
           </button>
         </div>
@@ -474,7 +474,7 @@ Resumo: ${n.resumo}${contextoDoc}`}]
                 Abra o HTML original localmente para acesso direto ao RSS.<br/>
                 O BCB serve com CORS aberto — funciona fora do sandbox.
               </div>
-              <button onClick={fetchAll} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:G, color:'#fff', fontSize:12.5, fontWeight:700, cursor:'pointer' }}>↻ Tentar novamente</button>
+              <button onClick={() => fetchAll(ano)} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:G, color:'#fff', fontSize:12.5, fontWeight:700, cursor:'pointer' }}>↻ Tentar novamente</button>
             </div>
           )}
 
