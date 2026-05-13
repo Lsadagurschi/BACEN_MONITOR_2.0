@@ -132,30 +132,31 @@ export default function NormasPage() {
     })
   }, [])
 
-  // Busca um feed para UM ano específico — retorna os itens
+  // Busca um feed via API Route server-side — sem bloqueio CORS
   const fetchFeedAno = useCallback(async (feed: typeof FEEDS[0], yr: number): Promise<RssItem[]> => {
-    const url = feed.supAno ? `${feed.url}?ano=${yr}` : feed.url
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 14000)
+    const params = new URLSearchParams({ feed: feed.id, ano: String(yr) })
+    const ctrl  = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 20000)
     try {
-      const r = await fetch(url, { signal:ctrl.signal, headers:{Accept:'application/json,application/atom+xml,application/rss+xml,*/*'} })
+      const r = await fetch(`/api/normas?${params}`, { signal: ctrl.signal })
       clearTimeout(timer)
       if (!r.ok) return []
-      const ct = r.headers.get('content-type') || ''
-      if (ct.includes('json')) {
-        const json = await r.json()
+      const body = await r.text()
+      const ct   = r.headers.get('content-type') || ''
+      if (ct.includes('json') || body.trimStart().startsWith('{') || body.trimStart().startsWith('[')) {
         try {
-          const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any)=>h._source) || []
+          const json = JSON.parse(body)
+          const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any) => h._source) || []
           return items.map((it:any) => ({
             titulo:    it.titulo || it.title || it.identifica || '',
-            link:      it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url||it.link||''),
-            descricao: (it.ementa||it.subTitulo||it.description||'').slice(0,300),
-            data:      it.pubDate||it.data||it.dataPublicacao||'',
-            guid:      it.id||it.urlTitle||it.link||String(Math.random()),
+            link:      it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url || it.link || ''),
+            descricao: (it.ementa || it.subTitulo || it.description || '').slice(0, 300),
+            data:      it.pubDate || it.data || it.dataPublicacao || '',
+            guid:      it.id || it.urlTitle || it.link || String(Math.random()),
           }))
         } catch { return [] }
       }
-      return parseXML(await r.text())
+      return parseXML(body)
     } catch { clearTimeout(timer); return [] }
   }, [])
 
