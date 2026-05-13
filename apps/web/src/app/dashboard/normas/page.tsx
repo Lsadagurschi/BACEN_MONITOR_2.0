@@ -132,9 +132,10 @@ export default function NormasPage() {
     })
   }, [])
 
-  // Busca um feed via API Route server-side — sem bloqueio CORS
-  const fetchFeedAno = useCallback(async (feed: typeof FEEDS[0], yr: number): Promise<RssItem[]> => {
-    const params = new URLSearchParams({ feed: feed.id, ano: String(yr) })
+  // Busca UM mês/feed via API Route (server-side, sem CORS)
+  const fetchUm = useCallback(async (feed: typeof FEEDS[0], mes?: number): Promise<RssItem[]> => {
+    const params = new URLSearchParams({ feed: feed.id, ano: '2026' })
+    if (mes) params.set('mes', String(mes))
     const ctrl  = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 20000)
     try {
@@ -142,60 +143,59 @@ export default function NormasPage() {
       clearTimeout(timer)
       if (!r.ok) return []
       const body = await r.text()
-      const ct   = r.headers.get('content-type') || ''
-      if (ct.includes('json') || body.trimStart().startsWith('{') || body.trimStart().startsWith('[')) {
-        try {
-          const json = JSON.parse(body)
-          const items = json?.items || json?.resultados || json?.hits?.hits?.map((h:any) => h._source) || []
-          return items.map((it:any) => ({
-            titulo:    it.titulo || it.title || it.identifica || '',
-            link:      it.urlTitle ? `https://www.in.gov.br/en/web/dou/-/${it.urlTitle}` : (it.url || it.link || ''),
-            descricao: (it.ementa || it.subTitulo || it.description || '').slice(0, 300),
-            data:      it.pubDate || it.data || it.dataPublicacao || '',
-            guid:      it.id || it.urlTitle || it.link || String(Math.random()),
-          }))
-        } catch { return [] }
-      }
+      if (!body || body.includes('"error"')) return []
       return parseXML(body)
     } catch { clearTimeout(timer); return [] }
   }, [])
 
-  // Busca todos os anos de um feed em paralelo e consolida
-  const fetchFeed = useCallback(async (feed: typeof FEEDS[0], anoRef: number) => {
+  // Busca um feed completo de 2026:
+  // - BCB: busca os 12 meses em paralelo (jan→mês atual) → cada mês retorna ~10 normas
+  // - Outros feeds (CVM, SUSEP, Senado): busca única sem filtro de mês
+  const fetchFeed = useCallback(async (feed: typeof FEEDS[0]) => {
     setFeeds(prev => ({...prev, [feed.id]:{items:[],loading:true,error:''}}))
-    // BCB retorna ~10 por ano → buscamos os últimos 5 anos em paralelo
-    const anos = feed.supAno
-      ? [anoRef, anoRef-1, anoRef-2, anoRef-3, anoRef-4]
-      : [anoRef]
+
+    const BCB_FEEDS = ['bcb_normativos','bcb_demais','bcb_cartas']
+    const mesAtual  = new Date().getMonth() + 1  // 1=jan … 12=dez
 
     try {
-      const resultados = await Promise.allSettled(anos.map(yr => fetchFeedAno(feed, yr)))
-      const seen = new Set<string>()
-      const allItems: RssItem[] = []
-      resultados.forEach(res => {
-        if (res.status === 'fulfilled') res.value.forEach(item => {
-          if (!item.titulo) return
-          const k = item.guid || item.link
-          if (k && !seen.has(k)) { seen.add(k); allItems.push(item) }
+      let allItems: RssItem[] = []
+
+      if (BCB_FEEDS.includes(feed.id)) {
+        // Busca todos os meses de jan/2026 até o mês atual em paralelo
+        const meses = Array.from({ length: mesAtual }, (_, i) => i + 1)  // [1,2,...,mesAtual]
+        const resultados = await Promise.allSettled(meses.map(m => fetchUm(feed, m)))
+        resultados.forEach(res => {
+          if (res.status === 'fulfilled') allItems.push(...res.value)
         })
+      } else {
+        // CVM, SUSEP, Senado — feed único sem filtro de mês
+        allItems = await fetchUm(feed)
+      }
+
+      // Deduplica por guid/link
+      const seen = new Set<string>()
+      const dedup: RssItem[] = []
+      allItems.forEach(item => {
+        if (!item.titulo) return
+        const k = item.guid || item.link
+        if (k && !seen.has(k)) { seen.add(k); dedup.push(item) }
       })
-      allItems.sort((a,b) => (b.data||'').localeCompare(a.data||''))
-      setFeeds(prev => ({...prev,[feed.id]:{items:allItems,loading:false,error:allItems.length?'':'Feed indisponível'}}))
+      dedup.sort((a, b) => (b.data||'').localeCompare(a.data||''))
+
+      setFeeds(prev => ({...prev,[feed.id]:{items:dedup,loading:false,error:dedup.length?'':'Feed indisponível'}}))
     } catch(e:any) {
       setFeeds(prev => ({...prev,[feed.id]:{items:[],loading:false,error:'Erro: '+e.message}}))
     }
-  }, [fetchFeedAno])
+  }, [fetchUm])
 
-  // Busca todos os feeds passando o ano explicitamente (evita closure stale)
-  const fetchAll = useCallback((anoRef: number) => {
-    FEEDS.forEach(f => fetchFeed(f, anoRef))
+  // Rebusca todos os feeds
+  const fetchAll = useCallback((_anoRef?: number) => {
+    FEEDS.forEach(f => fetchFeed(f))
   }, [fetchFeed])
 
-  // Busca inicial
-  useEffect(() => { fetchAll(ano) }, [])
-
-  // Rebusca quando o ano muda
-  useEffect(() => { fetchAll(ano) }, [ano])
+  // Busca inicial ao montar
+  useEffect(() => { fetchAll() }, [])
+  // Remove o useEffect que rebuscava ao trocar ano (não usamos mais anos anteriores)
 
   // monta normas a partir dos feeds + histórico persistido
   const allNormas: Norma[] = (() => {
@@ -450,7 +450,7 @@ Resumo: ${n.resumo}${contextoDoc}`}]
                 {area==='all' ? 'Normas BCB/CMN Vigentes' : AREAS.find(a=>a.id===area)?.l}
               </h1>
               <span style={{ fontSize:11, color:'#9ca3af', fontFamily:'monospace' }}>
-                {isLoading ? 'Buscando feeds ao vivo em bcb.gov.br…' : `${normas.length} normas no histórico · página ${paginaAtual}/${totalPaginas||1}`}
+                {isLoading ? 'Buscando todos os meses de 2026…' : `${normas.length} normas · jan–${new Date().toLocaleDateString('pt-BR',{month:'short'})}/2026`}
               </span>
             </div>
           </div>
